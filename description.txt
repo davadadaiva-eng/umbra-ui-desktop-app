@@ -1,0 +1,133 @@
+UMBRA OS - DESKTOP APP
+================================================================
+
+WHAT THIS PROJECT IS
+----------------------------------------------------------------
+Umbra is a desktop AI assistant app ("agent") with a dark, futuristic
+interface. You chat with it, and it remembers things about you and your
+conversations. It lives in an Electron window and can talk to you out
+loud using your own local voice tools when they are installed.
+
+It is a front-end app (React + Vite + TypeScript) wrapped in Electron.
+There is no backend server you need to run: all data is kept on your
+machine (localStorage), and AI/voice calls go straight to online
+services from the app itself.
+
+WHAT THE AGENT CAN DO
+----------------------------------------------------------------
+- Chat with you. By default it uses Google Gemini Flash 2.0. If Gemini
+  is out of quota or unreachable, the app automatically switches to a
+  free fallback provider (Umbra Free / pollinations) and retries, so
+  the agent usually still answers.
+- Speak out loud and listen. At startup it checks for local voice
+  engines:
+      * VoiceStudio  -> listens on port 3900
+      * voicebox     -> checks ports 5000 and 8000
+  If a local engine is online it is used for speech-to-text and
+  text-to-speech. If not, the app falls back to browser voices, and
+  cloud transcription (OpenAI/Groq) can be enabled in Settings.
+- Remember. Every conversation is written to a journal. Facts are
+  extracted automatically and stored, so the agent can recall things
+  you told it earlier. Each "agent" (profile) keeps its own memory.
+- Multiple panels (see the left sidebar):
+      Agent     -> the chat
+      Connectors, Devices  -> integrations and hardware
+      Vault     -> stored data
+      Brain     -> visual graph of remembered facts
+      Settings  -> choose AI provider/model, STT provider, voice
+      Meetings, Recall, Skills, Usage, AgentPhone, Desktop 2
+                   -> extra workspaces
+
+TECHNOLOGY
+----------------------------------------------------------------
+- React 19 + Vite + TypeScript
+- Tailwind CSS for styling
+- Zustand for app state (in src/stores/appStore.ts)
+- Electron shell (electron/main.cjs, electron/preload.cjs)
+- Lucide icons, canvas particle effects
+
+IMPORTANT FILES
+----------------------------------------------------------------
+  src/lib/ai.ts          -> AI providers, Gemini/OpenAI/Groq/Anthropic/
+                            free calls, quota/network fallback logic
+  src/lib/stt.ts         -> speech-to-text providers (local first)
+  src/lib/voiceEngines.ts-> local engine detection (VoiceStudio,
+                            voicebox) and browser voices
+  src/lib/voices.ts      -> voice list and TTS helpers
+  src/lib/brain.ts       -> fact extraction / memory store
+  src/stores/appStore.ts -> global app state
+  src/components/        -> all screens (AgentView, SettingsView, ...)
+  electron/main.cjs      -> Electron main process
+  .env                   -> LOCAL ONLY. Your Gemini API key lives here.
+                            This file is NOT committed to git.
+  .env.example           -> Template. Copy it to .env and add your key.
+
+HOW TO RUN IT
+----------------------------------------------------------------
+1) Install dependencies:
+       npm install
+
+2) Create your local key file (collaborators must do this):
+       copy .env.example to .env
+   and put your Google Gemini API key inside:
+       VITE_GEMINI_KEY=your-key-here
+   (If you leave it empty, you can paste a key later in Settings.)
+
+3) Run the desktop app:
+       npm run desktop
+   (This starts the Vite dev server and opens Electron.)
+
+   Or run just the web version in a browser:
+       npm run dev
+
+4) Build a packaged app:
+       npm run build          (type-check + bundle)
+       npm run desktop:pack   (electron-builder package)
+
+Login: the app uses a simple in-memory demo login
+       email: davide@gmail.com
+       password: davide
+
+RECENT IMPORTANT CHANGES (know these before editing)
+----------------------------------------------------------------
+- Gemini Flash (gemini-2.0-flash) is now the DEFAULT AI provider.
+  The API key comes from .env (VITE_GEMINI_KEY), never from the source.
+- AI fallback: if the primary provider hits quota (429) or a network
+  error, aiChat() retries with the free provider (pollinations) up to
+  3 times before giving up. See aiChat / aiChatOnceWithRetry in ai.ts.
+- Voice is LOCAL-FIRST: VoiceStudio (port 3900) and voicebox are
+  detected at startup; they win over browser voices. VoicePicker shows
+  which engine is actually live ("Local engines offline" when none).
+- electron/main.cjs disables QUIC/HTTP3:
+      app.commandLine.appendSwitch('disable-quic');
+      app.commandLine.appendSwitch('disable-features', 'Http3');
+  This was REQUIRED: on some machines Chromium could not reach
+  api.openai.com and text.pollinations.ai ("Failed to fetch" /
+  net::ERR_QUIC_PROTOCOL_ERROR) while Node could. Do not remove these
+  lines without re-testing OpenAI + pollinations calls.
+
+WHERE TO CONTINUE / GOOD NEXT STEPS
+----------------------------------------------------------------
+- Add or improve agent skills (see the Skills panel and skills-related
+  code) so the agent can do real actions, not just chat.
+- Wire the Connectors / Devices panels to real integrations and
+  hardware.
+- Reliable cloud calls: the renderer is sometimes blocked from certain
+  hosts (see QUIC note above). A solid upgrade is routing AI/STT calls
+  through the Electron MAIN process (IPC), which uses Node's fetch and
+  is more reliable than Chromium's networking.
+- Replace the demo login (in-memory) with a real auth flow if you plan
+  to share data across machines.
+- Tests: there is no test suite yet. Add Vitest + React Testing
+  Library, starting with src/lib/ai.ts (fallback logic) and
+  src/lib/voiceEngines.ts (detection).
+- Packaging: electron-builder config can be extended for auto-updates
+  and code signing.
+
+CHECKLIST FOR COLLABORATORS
+----------------------------------------------------------------
+1) Clone the repo.
+2) npm install
+3) Copy .env.example to .env and add a Gemini API key.
+4) npm run desktop
+5) Do NOT commit .env (it is gitignored on purpose - it holds secrets).
