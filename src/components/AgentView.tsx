@@ -41,6 +41,51 @@ const specialties: { re: RegExp; name: string; verb: string }[] = [
   { re: /music|song|playlist|audio mix/, name: 'Maestro', verb: 'Curating' },
 ];
 
+const BRAIN_BUILD_KEY = 'umbra-brainbuilt-v2';
+
+const BRAIN_QUESTIONS = [
+  {
+    tag: 'focus',
+    short: 'your main focus',
+    say: "Let's build your brain, one answer at a time. What are you working on lately — your main project, or focus?",
+  },
+  {
+    tag: 'people',
+    short: 'important people',
+    say: "Who are the most important people in your life or work? I'll remember their names.",
+  },
+  {
+    tag: 'peak-time',
+    short: 'your best hours',
+    say: 'What time of day are you most productive? I’ll time my reminders around it.',
+  },
+  {
+    tag: 'style',
+    short: 'how you like to talk',
+    say: 'How do you like to communicate — short and direct, or with more context?',
+  },
+  {
+    tag: 'tools',
+    short: 'the tools you use',
+    say: 'What tools or apps do you use every day? I’ll keep them handy in your vault.',
+  },
+  {
+    tag: 'goals',
+    short: 'your goals',
+    say: 'What goals are you chasing right now? I’ll help you track them.',
+  },
+  {
+    tag: 'boundaries',
+    short: 'your boundaries',
+    say: 'What should I never do? Tell me your boundaries and I’ll write them down.',
+  },
+  {
+    tag: 'preferences',
+    short: 'how you like things done',
+    say: 'Anything you want me to always remember about how you like things done?',
+  },
+];
+
 function taskFromCommand(raw: string): string {
   let s = raw
     .replace(/^(spawn|create|new|add|start|make|launch|open)\b/i, '')
@@ -89,7 +134,7 @@ const cleanName = (t: string) =>
     .slice(0, 24);
 
 export function AgentView() {
-  const { user, avatar, avatarName, namedMain, agents, focusedAgentId, profile, aiConfig, voiceURI, voiceboxProfile, journal, sttConfig, setProfile, setAvatarName, markNamedMain, setView, addAgent, removeAgent, addJournal, addFact, focusAgent, addBrainFile } = useAppStore();
+  const { user, avatar, avatarName, namedMain, agents, focusedAgentId, profile, aiConfig, voiceURI, voiceboxProfile, journal, sttConfig, talkAlways, setProfile, setAvatarName, markNamedMain, setView, addAgent, removeAgent, addJournal, addFact, focusAgent, addBrainFile } = useAppStore();
   const crew = [null, ...agents] as (NonNullable<typeof agents>[number] | null)[];
   const focusIdx = Math.max(0, crew.findIndex((a) => a && a.id === focusedAgentId));
   const focusedAgent = crew[focusIdx] ?? null;
@@ -161,12 +206,19 @@ export function AgentView() {
   const dragStartRef = useRef<{ x: number; y: number } | null>(null);
   const dragDirRef = useRef<{ dir: 'h' | 'v' | null; moved: boolean }>({ dir: null, moved: false });
   const clickGuardRef = useRef(false);
+  const barChannelRef = useRef<BroadcastChannel | null>(null);
+  const lastBarPostRef = useRef('');
+  const startWakeRef = useRef<() => void>(() => {});
+  const stopWakeRef = useRef<() => void>(() => {});
+  const talkAlwaysRef = useRef(talkAlways);
+  const brainRef = useRef<{ active: boolean; index: number; answers: string[] }>({ active: false, index: 0, answers: [] });
 
   avatarNameRef.current = avatarName;
   profileRef.current = profile;
   introStepRef.current = introStep;
   voiceURIRef.current = voiceURI;
   voiceboxProfileRef.current = voiceboxProfile;
+  talkAlwaysRef.current = talkAlways;
 
   useEffect(() => {
     Promise.all([isVoiceStudioOnline(1800), isVoiceboxOnline(1800)]).then(([vs, vb]) => {
@@ -836,6 +888,10 @@ export function AgentView() {
   );
 
   const handleIncoming = (text: string): boolean => {
+    if (brainRef.current.active) {
+      brainAnswer(text);
+      return true;
+    }
     addJournal('user', text);
     try {
       addBrainFile(`conversation_${Date.now()}.md`, `You: ${text}`, 'text/markdown');
@@ -973,8 +1029,11 @@ export function AgentView() {
 
   const startWake = () => {
     if (wakeOnRef.current) return;
-    const stt = useAppStore.getState().sttConfig ?? LOCAL_STT_DEFAULT;
-    if (stt) {
+    const stt = useAppStore.getState().sttConfig;
+    const cloudReady = !!stt?.apiKey && stt.provider !== 'local';
+    const localReady = voiceboxOnlineRef.current;
+    if (cloudReady || localReady) {
+      const sttCfg = stt ?? LOCAL_STT_DEFAULT;
       addJournal('action', 'Always-listening turned on');
       wakeRef.current = { armed: false, buffer: '' };
       finalIdxRef.current = 0;
@@ -982,8 +1041,13 @@ export function AgentView() {
       setWakeOn(true);
       setStatus({
         kind: 'wake',
-        text: introStepRef.current !== 'done' ? 'listening for your answer…' : `listening for "${avatarNameRef.current}"…`,
+        text: brainRef.current.active
+          ? 'listening… answer me'
+          : introStepRef.current !== 'done'
+            ? 'listening for your answer…'
+            : `listening for "${avatarNameRef.current}"…`,
       });
+      let fails = 0;
       void (async () => {
         if (!streamRef.current) {
           try {
@@ -1006,10 +1070,20 @@ export function AgentView() {
             const blob = new Blob(segChunks, { type: rec.mimeType || 'audio/webm' });
             if (blob.size) {
               try {
-                const text = await transcribeAudio(stt, blob);
+                const text = await transcribeAudio(sttCfg, blob);
+                fails = 0;
                 if (text && wakeOnRef.current) onWakeFinal(text);
-              } catch {
-                // skip silent or failed segments
+              } catch (e) {
+                const msg = (e as Error).message || '';
+                if (/no speech recognized/i.test(msg)) {
+                  fails = 0; // silence is normal
+                } else {
+                  fails += 1;
+                  if (fails >= 3 && wakeOnRef.current) {
+                    stopWake();
+                    setStatus({ kind: 'error', text: 'Speech-to-text is unreachable — check Settings or start VoiceStudio/voicebox.' });
+                  }
+                }
               }
             }
             window.setTimeout(segment, 250);
@@ -1030,7 +1104,7 @@ export function AgentView() {
       setStatus({
         kind: 'error',
         text: desktop
-          ? 'voice recognition needs a speech-to-text key — set one in Settings'
+          ? 'Voice needs speech-to-text — add a key in Settings, or start VoiceStudio/voicebox, so the wake word can hear you.'
           : 'voice recognition is not supported in this browser',
       });
       return;
@@ -1092,9 +1166,14 @@ export function AgentView() {
     setStatus({ kind: 'idle', text: introStepRef.current !== 'done' ? 'type your answer below…' : `say "${avatarNameRef.current}, open the brain" — or type below` });
   };
 
+  startWakeRef.current = startWake;
+  stopWakeRef.current = stopWake;
+
   const tapTalk = () => {
     const stt = useAppStore.getState().sttConfig;
-    if (stt?.apiKey) {
+    const cloudReady = !!stt?.apiKey && stt.provider !== 'local';
+    const localReady = voiceboxOnlineRef.current;
+    if (cloudReady || localReady) {
       if (recorderRef.current && recorderRef.current.state === 'recording') {
         recorderRef.current.stop();
         return;
@@ -1109,7 +1188,7 @@ export function AgentView() {
       setStatus({
         kind: 'error',
         text: desktop
-          ? 'voice needs a speech-to-text key — set one in Settings'
+          ? 'Voice needs speech-to-text — add a key in Settings, or start VoiceStudio/voicebox.'
           : 'voice recognition is not supported in this browser',
       });
       return;
@@ -1145,6 +1224,12 @@ export function AgentView() {
   };
 
   const onWakeFinal = (text: string) => {
+    if (brainRef.current.active) {
+      const t = text.trim();
+      wakeRef.current.buffer = '';
+      if (t) handleIncomingRef.current(t);
+      return;
+    }
     if (introStepRef.current !== 'done') {
       const t = text.trim();
       if (t) {
@@ -1179,6 +1264,109 @@ export function AgentView() {
       }
     }
   };
+
+  const beginBrainBuilding = () => {
+    if (brainRef.current.active) return;
+    brainRef.current = { active: true, index: 0, answers: [] };
+    addJournal('action', 'Building the brain — let’s get to know you');
+    const q = BRAIN_QUESTIONS[0];
+    setStatus({ kind: 'busy', text: `tell me — ${q.short}` });
+    speak(q.say);
+  };
+
+  const brainAnswer = (raw: string) => {
+    const b = brainRef.current;
+    const t = raw.trim();
+    if (t) b.answers.push(t);
+    b.index += 1;
+    if (b.index >= BRAIN_QUESTIONS.length) {
+      brainRef.current.active = false;
+      try {
+        localStorage.setItem(BRAIN_BUILD_KEY, '1');
+      } catch {
+        // ignore
+      }
+      const facts = BRAIN_QUESTIONS.map((q, i) => `${q.tag}: ${b.answers[i] ?? ''}`).filter((f) => !f.endsWith(': '));
+      for (const f of facts) {
+        if (f.includes(': ')) addFact(f);
+      }
+      try {
+        addBrainFile(
+          `brain_${Date.now()}.md`,
+          `# What I know about you\n\n${BRAIN_QUESTIONS.map((q, i) => `## ${q.short}\n${b.answers[i] ?? '(skipped)'}`).join('\n\n')}`,
+          'text/markdown'
+        );
+      } catch {
+        // ignore
+      }
+      addJournal('action', 'Brain building complete — memory seeded');
+      speak(`Done. I’ve written everything into your brain — say "${avatarNameRef.current}, open the brain" to see it grow.`);
+      setStatus({ kind: 'idle', text: `say "${avatarNameRef.current}, open the brain" — or type below` });
+    } else {
+      const q = BRAIN_QUESTIONS[b.index];
+      setStatus({ kind: 'busy', text: `tell me — ${q.short}` });
+      speak(q.say);
+    }
+  };
+
+  useEffect(() => {
+    if (introStep !== 'done' || !profile) return;
+    let done = false;
+    try {
+      done = localStorage.getItem(BRAIN_BUILD_KEY) === '1';
+    } catch {
+      // ignore
+    }
+    if (done || brainRef.current.active) return;
+    const t = window.setTimeout(beginBrainBuilding, 1100);
+    return () => window.clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [introStep, profile]);
+
+  useEffect(() => {
+    if (!talkAlwaysRef.current) {
+      if (wakeOnRef.current) stopWakeRef.current();
+      return;
+    }
+    if (introStep !== 'done') return;
+    if (wakeOnRef.current) return;
+    const t = window.setTimeout(() => {
+      if (talkAlwaysRef.current && !wakeOnRef.current) startWakeRef.current();
+    }, 1500);
+    return () => window.clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [introStep, profile, talkAlways]);
+
+  useEffect(() => {
+    const ch = new BroadcastChannel('umbra-bar');
+    barChannelRef.current = ch;
+    ch.onmessage = (e: MessageEvent<{ type?: string; text?: string; on?: boolean }>) => {
+      const m = e.data;
+      if (!m) return;
+      if (m.type === 'command' && typeof m.text === 'string') {
+        handleIncomingRef.current(m.text);
+      } else if (m.type === 'voice') {
+        if (m.on === false) stopWakeRef.current();
+        else if (m.on === true) startWakeRef.current();
+      }
+    };
+    return () => {
+      ch.close();
+      barChannelRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    const ch = barChannelRef.current;
+    if (!ch) return;
+    const s = isSpeaking ? 'speaking' : status.kind === 'busy' ? 'processing' : status.kind === 'wake' || status.kind === 'armed' ? 'listening' : 'idle';
+    const key = `${s}|${status.text}`;
+    if (key === lastBarPostRef.current) return;
+    lastBarPostRef.current = key;
+    ch.postMessage({ type: 'state', state: s, text: status.text });
+  }, [status, isSpeaking]);
+
+  const brainMode = brainRef.current.active;
 
   const runInput = () => {
     if (!input.trim()) return;
@@ -1215,7 +1403,52 @@ export function AgentView() {
       >
         <div ref={sphereRef} className="absolute inset-0" style={{ transformOrigin: 'center' }}>
           <div ref={pulseRef} className="absolute inset-0" style={{ transformOrigin: 'center' }}>
-            <div className="absolute" style={{ left: 'calc(50% - 20vmin)', top: '50%' }}>
+            <div className="absolute" style={{ left: 'calc(50% - 20vmin)', top: '40%' }}>
+              {lastLine && (
+                <div
+                  className="absolute pointer-events-none"
+                  style={{
+                    left: '50%',
+                    top: 0,
+                    transform: 'translate(-50%, calc(-100% - 22vmin))',
+                    zIndex: 200,
+                  }}
+                >
+                  <div
+                    className="relative rounded-2xl px-4 py-2.5 text-sm font-light leading-snug"
+                    style={{
+                      maxWidth: 'min(46vw, 460px)',
+                      maxHeight: '16vh',
+                      overflow: 'hidden',
+                      background: 'rgba(10,12,16,0.92)',
+                      border: `1px solid ${accent}55`,
+                      color: 'var(--text-primary)',
+                      backdropFilter: 'blur(14px)',
+                      WebkitBackdropFilter: 'blur(14px)',
+                      boxShadow: '0 12px 40px rgba(0,0,0,0.45)',
+                      display: '-webkit-box',
+                      WebkitLineClamp: 3,
+                      WebkitBoxOrient: 'vertical',
+                      fontFamily: 'var(--font)',
+                    }}
+                  >
+                    {lastLine}
+                    <div
+                      className="absolute"
+                      style={{
+                        left: '50%',
+                        bottom: -5,
+                        width: 10,
+                        height: 10,
+                        transform: 'translateX(-50%) rotate(45deg)',
+                        background: 'rgba(10,12,16,0.92)',
+                        borderRight: '1px solid var(--hairline-strong)',
+                        borderBottom: '1px solid var(--hairline-strong)',
+                      }}
+                    />
+                  </div>
+                </div>
+              )}
               {crew.map((agent, i) => {
                 const o = i - focusIdx;
                 const isMain = !agent;
@@ -1582,12 +1815,6 @@ export function AgentView() {
           style={{ opacity: Math.max(0, 1 - slide * 1.1), pointerEvents: slide > 0.3 ? 'none' : 'auto' }}
         >
         <div className="flex flex-col items-center gap-2.5" style={{ maxWidth: 620, margin: '0 auto' }}>
-          {lastLine && (
-            <p className="text-sm text-center font-light" style={{ color: 'var(--text-dim)', maxWidth: 560 }}>
-              {lastLine}
-            </p>
-          )}
-
           <div className="flex items-center gap-2 pointer-events-auto w-full">
             <button
               className="flex-shrink-0 rounded-full flex items-center justify-center transition-transform hover:scale-105"
@@ -1634,7 +1861,7 @@ export function AgentView() {
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') runInput();
                 }}
-                placeholder={introMode ? 'Type or speak your answer…' : 'Say something to Umbra — or type here…'}
+                placeholder={brainMode ? 'Answer to help build your brain…' : introMode ? 'Type or speak your answer…' : 'Say something to Umbra — or type here…'}
                 className="bg-transparent outline-none text-sm flex-1 min-w-0"
                 style={{ color: 'var(--text-primary)', fontFamily: 'var(--font)' }}
               />

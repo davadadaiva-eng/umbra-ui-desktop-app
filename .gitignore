@@ -18,6 +18,9 @@ release
 .env.*
 !.env.example
 
+# Agent workspace state
+.freebuff/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

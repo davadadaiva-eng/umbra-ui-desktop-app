@@ -1,5 +1,7 @@
 import { create } from 'zustand';
 import type { STTConfig } from '../lib/stt';
+import { supabase, signIn, signUp, signOut, sendVerificationCode, verifyEmailCode, sessionToAuthView } from '../lib/auth';
+import type { AuthResult } from '../lib/auth';
 
 export type View = 'agent' | 'recall' | 'brain' | 'devices' | 'skills' | 'vault' | 'connectors' | 'meetings' | 'usage' | 'phone' | 'desktop2' | 'settings';
 
@@ -68,6 +70,7 @@ const AGENTS_KEY = 'umbra-agents-v2';
 const SEED_KEY = 'umbra-seed-v1';
 const BRAIN_KEY = 'umbra-brain-files-v1';
 const STT_KEY = 'umbra-stt-v1';
+const TALKALWAYS_KEY = 'umbra-talkalways-v1';
 const BRAIN_CAP = 300;
 const JOURNAL_CAP = 600;
 
@@ -134,6 +137,14 @@ function loadVoiceURI(): string | null {
     return localStorage.getItem(VOICE_KEY);
   } catch {
     return null;
+  }
+}
+
+function loadTalkAlways(): boolean {
+  try {
+    return localStorage.getItem(TALKALWAYS_KEY) !== '0';
+  } catch {
+    return true;
   }
 }
 
@@ -312,6 +323,9 @@ function saveAgents(agents: Agent[]) {
 
 interface AppState {
   isAuthenticated: boolean;
+  isAuthReady: boolean;
+  emailVerified: boolean;
+  isOnboarded: boolean;
   user: User | null;
   avatar: AvatarConfig;
   avatarName: string;
@@ -326,8 +340,15 @@ interface AppState {
   focusedAgentId: string | null;
   currentView: View;
   isSidebarCollapsed: boolean;
-  login: (email: string, password: string) => Promise<boolean>;
-  logout: () => void;
+  talkAlways: boolean;
+  initializeAuth: () => Promise<void>;
+  login: (email: string, password: string) => Promise<AuthResult>;
+  signup: (name: string, email: string, password: string) => Promise<AuthResult>;
+  sendCode: (email: string) => Promise<AuthResult>;
+  verifyCode: (email: string, code: string) => Promise<AuthResult>;
+  setTalkAlways: (on: boolean) => void;
+  finishOnboarding: () => Promise<void>;
+  logout: () => Promise<void>;
   setView: (view: View) => void;
   toggleSidebar: () => void;
   updateAvatar: (patch: Partial<AvatarConfig>) => void;
@@ -363,8 +384,13 @@ export const defaultAvatar: AvatarConfig = {
   accent: '#3B82F6',
 };
 
+let authListenerStarted = false;
+
 export const useAppStore = create<AppState>((set) => ({
   isAuthenticated: false,
+  isAuthReady: false,
+  emailVerified: false,
+  isOnboarded: false,
   user: null,
   avatar: loadAvatar(),
   avatarName: loadAgentName(AGENT_NAME_KEY) ?? 'Umbra',
@@ -380,22 +406,113 @@ export const useAppStore = create<AppState>((set) => ({
   focusedAgentId: null,
   currentView: 'agent',
   isSidebarCollapsed: false,
+  talkAlways: loadTalkAlways(),
 
-  login: async (email: string, password: string) => {
-    if (email === 'davide@gmail.com' && password === 'davide') {
-      set({
-        isAuthenticated: true,
-        user: { email, name: 'Davide' },
-      });
-      return true;
+  initializeAuth: async () => {
+    const sb = supabase;
+    if (!sb) {
+      set({ isAuthReady: true });
+      return;
     }
-    return false;
+    type SessionType = Awaited<ReturnType<typeof sb.auth.getSession>>['data']['session'];
+    let session: SessionType = null;
+    try {
+      const result = await Promise.race([
+        sb.auth.getSession(),
+        new Promise<{ data: { session: null } }>((resolve) =>
+          setTimeout(() => resolve({ data: { session: null } }), 8000)
+        ),
+      ]);
+      session = result.data?.session ?? null;
+    } catch (e) {
+      console.error('[auth] initializeAuth failed', e);
+    }
+    const applySession = (nextSession: SessionType | null) => {
+      const v = sessionToAuthView(nextSession);
+      set({ isAuthenticated: !!nextSession, user: v.user, emailVerified: v.emailVerified, isOnboarded: v.isOnboarded });
+    };
+
+    set({ isAuthReady: true, isAuthenticated: !!session });
+    applySession(session);
+
+    if (!authListenerStarted) {
+      sb.auth.onAuthStateChange((_event, nextSession) => {
+        applySession(nextSession);
+      });
+      authListenerStarted = true;
+    }
   },
 
-  logout: () => {
+  login: async (email: string, password: string) => {
+    const res = await signIn(email, password);
+    if (res.ok && supabase) {
+      const { data } = await supabase.auth.getSession();
+      const v = sessionToAuthView(data?.session);
+      set({ isAuthenticated: true, user: v.user, emailVerified: v.emailVerified, isOnboarded: v.isOnboarded });
+    }
+    return res;
+  },
+
+  signup: async (name, email, password) => {
+    const res = await signUp(name, email, password);
+    if (!res.ok || !supabase) return res;
+    // Sign up succeeded. If Supabase didn't hand us a session right away
+    // (e.g. "Confirm email" is on), try a normal password sign-in so the
+    // user lands in the app instead of on a verification screen.
+    const { data } = await supabase.auth.getSession();
+    if (data?.session) {
+      const v = sessionToAuthView(data.session);
+      set({ isAuthenticated: true, user: v.user, emailVerified: v.emailVerified, isOnboarded: v.isOnboarded });
+      return res;
+    }
+    const loginRes = await signIn(email, password);
+    if (loginRes.ok) {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const v = sessionToAuthView(sessionData?.session);
+      set({ isAuthenticated: true, user: v.user, emailVerified: v.emailVerified, isOnboarded: v.isOnboarded });
+    }
+    return loginRes.ok ? res : loginRes;
+  },
+
+  sendCode: (email) => sendVerificationCode(email),
+
+  verifyCode: async (email, code) => {
+    const res = await verifyEmailCode(email, code);
+    if (res.ok && supabase) {
+      const { data } = await supabase.auth.getSession();
+      const v = sessionToAuthView(data?.session);
+      set({ isAuthenticated: true, emailVerified: true, user: v.user, isOnboarded: v.isOnboarded });
+    }
+    return res;
+  },
+
+  setTalkAlways: (on) => {
+    set({ talkAlways: on });
+    try {
+      localStorage.setItem(TALKALWAYS_KEY, on ? '1' : '0');
+    } catch {
+      // ignore
+    }
+  },
+
+  finishOnboarding: async () => {
+    if (supabase) {
+      try {
+        await supabase.auth.updateUser({ data: { onboarded: true } });
+      } catch {
+        // ignore
+      }
+    }
+    set({ isOnboarded: true });
+  },
+
+  logout: async () => {
+    await signOut();
     set({
       isAuthenticated: false,
       user: null,
+      emailVerified: false,
+      isOnboarded: false,
       currentView: 'agent',
     });
   },

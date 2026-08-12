@@ -50,6 +50,7 @@ IMPORTANT FILES
 ----------------------------------------------------------------
   src/lib/ai.ts          -> AI providers, Gemini/OpenAI/Groq/Anthropic/
                             free calls, quota/network fallback logic
+  src/lib/auth.ts        -> Supabase Auth client (cloud login/signup)
   src/lib/stt.ts         -> speech-to-text providers (local first)
   src/lib/voiceEngines.ts-> local engine detection (VoiceStudio,
                             voicebox) and browser voices
@@ -58,8 +59,9 @@ IMPORTANT FILES
   src/stores/appStore.ts -> global app state
   src/components/        -> all screens (AgentView, SettingsView, ...)
   electron/main.cjs      -> Electron main process
-  .env                   -> LOCAL ONLY. Your Gemini API key lives here.
-                            This file is NOT committed to git.
+.env                   -> LOCAL ONLY. Your Gemini API key and Supabase
+                             auth credentials live here. This file is NOT
+                             committed to git.
   .env.example           -> Template. Copy it to .env and add your key.
 
 HOW TO RUN IT
@@ -73,6 +75,13 @@ HOW TO RUN IT
        VITE_GEMINI_KEY=your-key-here
    (If you leave it empty, you can paste a key later in Settings.)
 
+   Cloud login needs Supabase credentials too:
+       VITE_SUPABASE_URL=https://<project>.supabase.co
+       VITE_SUPABASE_ANON_KEY=sb_publishable_...
+   Get both from the Supabase dashboard -> Project Settings -> API.
+   Until these are set, the app shows the login screen but cannot
+   authenticate (it warns "Supabase auth is not configured").
+
 3) Run the desktop app:
        npm run desktop
    (This starts the Vite dev server and opens Electron.)
@@ -84,9 +93,17 @@ HOW TO RUN IT
        npm run build          (type-check + bundle)
        npm run desktop:pack   (electron-builder package)
 
-Login: the app uses a simple in-memory demo login
-       email: davide@gmail.com
-       password: davide
+Login: cloud auth via Supabase (email + password). Sign up on the
+       login screen and you are signed in immediately - there is NO
+       email verification step in the app right now (the verification
+       screens still exist but are unused). Duplicate emails are
+       rejected in-app with a message. The session survives restarts
+       (localStorage + Supabase session). Set VITE_SUPABASE_URL and
+       VITE_SUPABASE_ANON_KEY in .env to enable it.
+       NOTE: for signup to return a session directly, the Supabase
+       project should have "Confirm email" OFF (Authentication ->
+       Sign In / Up -> Email). If it is ON, signup shows the
+       "Email not confirmed" error which tells you how to fix it.
 
 RECENT IMPORTANT CHANGES (know these before editing)
 ----------------------------------------------------------------
@@ -105,9 +122,56 @@ RECENT IMPORTANT CHANGES (know these before editing)
   api.openai.com and text.pollinations.ai ("Failed to fetch" /
   net::ERR_QUIC_PROTOCOL_ERROR) while Node could. Do not remove these
   lines without re-testing OpenAI + pollinations calls.
+- index.html has a strict Content-Security-Policy. Every external host
+  the renderer talks to MUST be whitelisted in connect-src, or it will
+  fail with a generic "Failed to fetch" (no QUIC/network involved,
+  CSP blocks it). Supabase needed https://*.supabase.co added here.
+  When you add integrations, whitelist their domains too.
+- Login is now REAL auth via Supabase (email/password, sign up + sign
+  in + reset password). The old hardcoded davide@gmail.com/davide demo
+  login is gone. Config lives in .env (VITE_SUPABASE_URL and
+  VITE_SUPABASE_ANON_KEY); session is restored on startup. See
+  src/lib/auth.ts and the login/signup/signOut/initializeAuth actions
+  in src/stores/appStore.ts.
+- Email verification is DISABLED in the app for now (plain login/signup;
+  signup auto-signs-in via appStore.signup). The old OTP flow
+  (sendCode -> signInWithOtp -> verifyCode -> verifyOtp) still exists
+  in src/lib/auth.ts + src/stores/appStore.ts and the
+  CodeVerificationScreen/VerifyCodeBox components remain, but nothing
+  routes to them. Re-enable by restoring the App.tsx gate and the
+  LoginScreen pendingEmail flow if needed later.
+
+SUPABASE EMAIL SETUP (verification codes)
+----------------------------------------------------------------
+Only relevant if email verification is re-enabled in the app (it is
+currently disabled). The code-only emails are configured in the
+Supabase DASHBOARD, not in this repo. Steps:
+
+1) Code instead of login link:
+   Dashboard -> Authentication -> Email Templates.
+   - "Magic link or OTP" template (this is what the app's sendCode
+     triggers) -> replace body with {{ .Token }} (the 6-digit code),
+     remove the {{ .ConfirmationURL }} link.
+   - "Confirm signup" template (fires on signUp) -> same, code-only.
+   Subject: e.g. "{{ .Token }} is your Umbra OS verification code".
+   Suggested body:
+     <h2>Your Umbra OS verification code</h2>
+     <p>Enter this 6-digit code in the Umbra desktop app. It expires
+     shortly.</p>
+     <p style="font-size:30px;font-weight:700;letter-spacing:6px;">{{ .Token }}</p>
+     <p>If you didn't request this, ignore this email.</p>
+
+2) Sender name "Umbra OS":
+   Requires Custom SMTP (the shared built-in relay always sends as
+   "Supabase Auth <no-reply@supabase.co>", which Gmail shows as
+   "via supabase.co").
+   Dashboard -> Project Settings -> Authentication -> SMTP Settings ->
+   Enable Custom SMTP -> SMTP Sender Name = "Umbra OS".
+   You need your own SMTP provider (Resend, SendGrid, Mailgun, ...)
+   and the sender email must be on a domain you verified with it.
 
 WHERE TO CONTINUE / GOOD NEXT STEPS
-----------------------------------------------------------------
+---------------------------------------------------------------
 - Add or improve agent skills (see the Skills panel and skills-related
   code) so the agent can do real actions, not just chat.
 - Wire the Connectors / Devices panels to real integrations and
@@ -116,8 +180,10 @@ WHERE TO CONTINUE / GOOD NEXT STEPS
   hosts (see QUIC note above). A solid upgrade is routing AI/STT calls
   through the Electron MAIN process (IPC), which uses Node's fetch and
   is more reliable than Chromium's networking.
-- Replace the demo login (in-memory) with a real auth flow if you plan
-  to share data across machines.
+- Per-user cloud data: auth now identifies the user (supabase.auth).
+  The next step is storing conversations/brain per user in a Supabase
+  table or at least namespacing localStorage by user id so multiple
+  accounts on one machine do not share the same vault.
 - Tests: there is no test suite yet. Add Vitest + React Testing
   Library, starting with src/lib/ai.ts (fallback logic) and
   src/lib/voiceEngines.ts (detection).
@@ -128,6 +194,7 @@ CHECKLIST FOR COLLABORATORS
 ----------------------------------------------------------------
 1) Clone the repo.
 2) npm install
-3) Copy .env.example to .env and add a Gemini API key.
+3) Copy .env.example to .env, add VITE_GEMINI_KEY and the Supabase
+   credentials (VITE_SUPABASE_URL + VITE_SUPABASE_ANON_KEY).
 4) npm run desktop
 5) Do NOT commit .env (it is gitignored on purpose - it holds secrets).

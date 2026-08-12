@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import gsap from 'gsap';
 import { useAppStore } from './stores/appStore';
 import { LoginScreen } from './components/LoginScreen';
+import { OnboardingScreen } from './components/OnboardingScreen';
 import { TitleBar } from './components/TitleBar';
 import { Sidebar } from './components/Sidebar';
 import { AgentView } from './components/AgentView';
@@ -16,6 +17,7 @@ import { MeetingsView } from './components/MeetingsView';
 import { UsageView } from './components/UsageView';
 import { PhoneView } from './components/PhoneView';
 import { Desktop2View } from './components/Desktop2View';
+import { UmbraBar } from './components/UmbraBar';
 import GlitterWrap from './components/GlitterWrap';
 
 const viewComponents: Record<string, React.FC> = {
@@ -58,7 +60,35 @@ function ViewRenderer() {
 }
 
 export default function App() {
-  const { isAuthenticated, currentView } = useAppStore();
+  const { isAuthenticated, isOnboarded, isAuthReady, currentView, initializeAuth } = useAppStore();
+
+  useEffect(() => {
+    void initializeAuth();
+  }, [initializeAuth]);
+
+  const isBarWindow = new URLSearchParams(window.location.search).get('view') === 'bar';
+  if (isBarWindow) {
+    return <UmbraBar />;
+  }
+
+  if (!isAuthReady) {
+    return (
+      <div className="fixed inset-0 flex items-center justify-center" style={{ background: 'var(--bg)' }}>
+        <div
+          className="orb"
+          style={{ width: 56, height: 56, background: 'var(--accent-gradient)', border: 'none', boxShadow: '0 0 40px rgba(59,130,246,0.35)' }}
+        />
+      </div>
+    );
+  }
+
+  if (!isAuthenticated) {
+    return <LoginScreen />;
+  }
+
+  if (!isOnboarded) {
+    return <OnboardingScreen />;
+  }
 
   return (
     <div className="fixed inset-0" style={{ background: 'var(--bg)' }}>

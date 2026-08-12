@@ -59,7 +59,7 @@ const groupIcons: Record<string, JSX.Element> = {
 };
 
 export function SettingsView() {
-  const { user, avatar, updateAvatar, agents, logout, aiConfig, setAIConfig, clearAIConfig, sttConfig, setSTTConfig, clearSTTConfig, addJournal, setView } = useAppStore();
+  const { user, avatar, avatarName, updateAvatar, agents, logout, aiConfig, setAIConfig, clearAIConfig, sttConfig, setSTTConfig, clearSTTConfig, talkAlways, setTalkAlways, addJournal, setView } = useAppStore();
   const headerRef = useRef<HTMLDivElement>(null);
   const groupsRef = useRef<HTMLDivElement>(null);
 
@@ -331,6 +331,51 @@ export function SettingsView() {
           </p>
 
           <VoicePicker />
+        </div>
+
+        <div className="card p-5 mt-4 settings-group" style={{ background: 'var(--surface-1)' }}>
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <span className="w-7 h-7 rounded-full flex items-center justify-center flex-shrink-0" style={{ background: 'var(--surface-2)', border: '1px solid var(--hairline)', color: talkAlways ? '#22C55E' : avatar.accent }}>
+                <AudioLines size={15} />
+              </span>
+              <div className="min-w-0">
+                <h2 className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>Talk mode — always listen</h2>
+                <p className="text-xs font-light" style={{ color: 'var(--text-dim)' }}>
+                  Umbra listens for “{avatarName}, …” in the background and wakes hands-free. Off turns the mic off until you tap wake on the agent page.
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={() => setTalkAlways(!talkAlways)}
+              className="flex-shrink-0"
+              style={{
+                width: 44,
+                height: 24,
+                borderRadius: 999,
+                border: 'none',
+                cursor: 'pointer',
+                position: 'relative',
+                background: talkAlways ? '#22C55E' : 'var(--surface-3)',
+                transition: 'background 0.2s',
+              }}
+              title={talkAlways ? 'Talk mode on — click to turn off' : 'Talk mode off — click to turn on'}
+            >
+              <span
+                style={{
+                  position: 'absolute',
+                  top: 3,
+                  left: talkAlways ? 23 : 3,
+                  width: 18,
+                  height: 18,
+                  borderRadius: 999,
+                  background: '#fff',
+                  transition: 'left 0.2s',
+                  boxShadow: '0 1px 4px rgba(0,0,0,0.4)',
+                }}
+              />
+            </button>
+          </div>
         </div>
 
         <div className="card p-5 mt-4 settings-group" style={{ background: 'var(--surface-1)', border: `1px solid ${sttConfig ? 'rgba(129,199,132,0.35)' : 'var(--hairline-strong)'}` }}>

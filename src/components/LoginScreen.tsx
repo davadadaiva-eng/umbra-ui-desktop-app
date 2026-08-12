@@ -1,13 +1,20 @@
 import { useRef, useEffect, useState } from 'react';
 import gsap from 'gsap';
 import { useAppStore } from '../stores/appStore';
+import { resetPassword } from '../lib/auth';
 import { Typewriter } from './Typewriter';
 
+type Mode = 'signin' | 'signup';
+
 export function LoginScreen() {
-  const { login } = useAppStore();
+  const { login, signup, isAuthReady } = useAppStore();
+  const [mode, setMode] = useState<Mode>('signin');
+  const [ready, setReady] = useState(false);
+  const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
+  const [info, setInfo] = useState('');
   const [isLoading, setIsLoading] = useState(false);
 
   const rootRef = useRef<HTMLDivElement>(null);
@@ -16,16 +23,12 @@ export function LoginScreen() {
   const errRef = useRef<HTMLParagraphElement>(null);
 
   useEffect(() => {
-    const ctx = gsap.context(() => {
-      const tl = gsap.timeline({ defaults: { ease: 'power2.out', duration: 0.5 } });
-      tl.fromTo(cardRef.current, { opacity: 0, y: 18, scale: 0.98 }, { opacity: 1, y: 0, scale: 1 });
-      if (formRef.current) {
-        const inputs = formRef.current.querySelectorAll('input, button');
-        tl.fromTo(inputs, { opacity: 0, y: 10 }, { opacity: 1, y: 0, stagger: 0.07, duration: 0.35 }, '-=0.2');
-      }
-    }, rootRef);
-    return () => ctx.revert();
-  }, []);
+    if (isAuthReady) {
+      const t = setTimeout(() => setReady(true), 30);
+      return () => clearTimeout(t);
+    }
+    return undefined;
+  }, [isAuthReady]);
 
   useEffect(() => {
     if (error && errRef.current) {
@@ -40,15 +43,59 @@ export function LoginScreen() {
     }
   }, [error]);
 
+  const switchMode = (next: Mode) => {
+    setMode(next);
+    setError('');
+    setInfo('');
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
+    setInfo('');
+
+    if (mode === 'signup' && !name.trim()) {
+      setError('Enter your name.');
+      return;
+    }
+    if (!email.trim() || !password) {
+      setError('Enter your email and password.');
+      return;
+    }
+
     setIsLoading(true);
-    await new Promise((r) => setTimeout(r, 500));
-    const success = await login(email, password);
-    if (!success) setError('Invalid credentials');
+    const res = mode === 'signin' ? await login(email, password) : await signup(name, email, password);
     setIsLoading(false);
+
+    if (!res.ok) {
+      setError(res.error ?? 'Something went wrong.');
+    }
   };
+
+  const handleForgot = async () => {
+    if (!email.trim()) {
+      setError('Enter your email first, then tap “Forgot password”.');
+      return;
+    }
+    setError('');
+    setInfo('');
+    setIsLoading(true);
+    const res = await resetPassword(email);
+    setIsLoading(false);
+    if (res.ok) setInfo('Password reset link sent — check your inbox.');
+    else setError(res.error ?? 'Could not send a reset link.');
+  };
+
+  if (!isAuthReady) {
+    return (
+      <div className="fixed inset-0 flex items-center justify-center">
+        <div
+          className="orb"
+          style={{ width: 56, height: 56, background: 'var(--accent-gradient)', border: 'none', boxShadow: '0 0 40px rgba(59,130,246,0.35)' }}
+        />
+      </div>
+    );
+  }
 
   return (
     <div
@@ -66,7 +113,15 @@ export function LoginScreen() {
         }}
       />
 
-      <div ref={cardRef} className="relative w-full max-w-md px-6" style={{ opacity: 0 }}>
+      <div
+        ref={cardRef}
+        className="relative w-full max-w-md px-6"
+        style={{
+          opacity: ready ? 1 : 0,
+          transform: ready ? 'translateY(0) scale(1)' : 'translateY(18px) scale(0.98)',
+          transition: 'opacity 0.5s ease, transform 0.5s ease',
+        }}
+      >
         <div className="text-center mb-10">
           <div
             className="w-24 h-24 rounded-full mx-auto mb-6 orb flex items-center justify-center"
@@ -97,7 +152,22 @@ export function LoginScreen() {
           </div>
         </div>
 
-        <form ref={formRef} onSubmit={handleSubmit} className="glass rounded-3xl p-8 space-y-4" style={{ background: 'rgba(23, 23, 23, 0.7)' }}>
+        <>
+          <form ref={formRef} onSubmit={handleSubmit} className="glass rounded-3xl p-8 space-y-4" style={{ background: 'rgba(23, 23, 23, 0.7)' }}>
+          {mode === 'signup' && (
+            <div>
+              <label className="block text-xs font-medium uppercase tracking-widest mb-2" style={{ color: 'var(--text-dim)' }}>
+                Name
+              </label>
+              <input
+                type="text"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="Davide"
+                className="input-field"
+              />
+            </div>
+          )}
           <div>
             <label className="block text-xs font-medium uppercase tracking-widest mb-2" style={{ color: 'var(--text-dim)' }}>
               Email
@@ -106,9 +176,9 @@ export function LoginScreen() {
               type="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              placeholder="davide@gmail.com"
+              placeholder="you@example.com"
               className="input-field"
-              autoFocus
+              autoFocus={mode === 'signin'}
             />
           </div>
           <div>
@@ -119,43 +189,56 @@ export function LoginScreen() {
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              placeholder="davide"
+              placeholder="••••••••"
               className="input-field"
             />
           </div>
 
-          <div style={{ minHeight: 22 }}>
-            {error && (
-              <p ref={errRef} className="text-sm" style={{ color: '#FF6B6B' }}>
-                Invalid credentials — try again
-              </p>
+          <div className="flex items-center justify-between" style={{ minHeight: 22 }}>
+            <div className="flex-1">
+              {error ? (
+                <p ref={errRef} className="text-sm" style={{ color: '#FF6B6B' }}>
+                  {error}
+                </p>
+              ) : info ? (
+                <p className="text-sm" style={{ color: '#81C784' }}>
+                  {info}
+                </p>
+              ) : null}
+            </div>
+            {mode === 'signin' && (
+              <button type="button" onClick={handleForgot} disabled={isLoading} className="text-xs whitespace-nowrap ml-3" style={{ color: 'var(--text-faint)', fontFamily: 'var(--font)' }}>
+                Forgot password?
+              </button>
             )}
           </div>
 
           <button type="submit" disabled={isLoading} className="btn-primary w-full" style={{ height: 46 }}>
             {isLoading ? (
               <span className="inline-block w-4 h-4 rounded-full border border-current border-t-transparent animate-spin" />
-            ) : (
+            ) : mode === 'signin' ? (
               'Enter UmbraOS'
+            ) : (
+              'Create account'
             )}
           </button>
         </form>
 
-        <div className="flex items-center justify-center gap-3 mt-8 opacity-70">
-          <span
-            className="rounded-full"
-            style={{
-              width: 30,
-              height: 30,
-              background: 'radial-gradient(circle at 32% 30%, #3B82F6, #3B82F655 70%, transparent 75%), var(--surface-2)',
-              border: '1px solid #3B82F644',
-              boxShadow: '0 0 12px #3B82F633',
-            }}
-          />
-          <p className="text-sm" style={{ color: 'var(--text-faint)' }}>
-            demo · davide@gmail.com / davide
-          </p>
+        <div className="flex items-center justify-center gap-3 mt-8">
+          {mode === 'signin' ? (
+            <button onClick={() => switchMode('signup')} className="text-sm" style={{ color: 'var(--text-dim)', fontFamily: 'var(--font)' }}>
+              No account yet? <span style={{ color: '#60A5FA' }}>Create one</span>
+            </button>
+          ) : (
+            <button onClick={() => switchMode('signin')} className="text-sm" style={{ color: 'var(--text-dim)', fontFamily: 'var(--font)' }}>
+              Already have an account? <span style={{ color: '#60A5FA' }}>Sign in</span>
+            </button>
+          )}
         </div>
+        <p className="text-center text-xs mt-3" style={{ color: 'var(--text-faint)' }}>
+          Your account lives in the cloud — your conversations and brain stay on this device.
+        </p>
+          </>
       </div>
     </div>
   );
