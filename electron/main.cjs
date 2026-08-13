@@ -57,8 +57,8 @@ function createWindow() {
 function createBarWindow() {
   if (barWin && !barWin.isDestroyed()) return;
   const bar = new BrowserWindow({
-    width: 460,
-    height: 74,
+    width: 428,
+    height: 148,
     frame: false,
     transparent: true,
     backgroundColor: '#00000000',

@@ -1,7 +1,7 @@
 import { useRef, useEffect } from 'react';
 import gsap from 'gsap';
 import { useAppStore, type View } from '../stores/appStore';
-import { Bookmark, Brain, Settings, LogOut, Bot, Smartphone, Wrench, Lock, Plug, BarChart3, Phone, Monitor, Video, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Brain, Settings, LogOut, Bot, Smartphone, Wrench, Lock, Plug, BarChart3, Phone, Video, ChevronLeft, ChevronRight } from 'lucide-react';
 
 const navItems: { id: View; label: string; icon: React.ReactNode }[] = [
   { id: 'agent', label: 'Agent', icon: <Bot size={16} /> },
@@ -9,13 +9,11 @@ const navItems: { id: View; label: string; icon: React.ReactNode }[] = [
   { id: 'vault', label: 'Vault', icon: <Lock size={16} /> },
   { id: 'devices', label: 'Devices', icon: <Smartphone size={16} /> },
   { id: 'brain', label: 'Brain', icon: <Brain size={16} /> },
-  { id: 'settings', label: 'Settings', icon: <Settings size={16} /> },
   { id: 'meetings', label: 'Meetings', icon: <Video size={16} /> },
-  { id: 'recall', label: 'Recall', icon: <Bookmark size={16} /> },
   { id: 'skills', label: 'Skills', icon: <Wrench size={16} /> },
   { id: 'usage', label: 'Usage', icon: <BarChart3 size={16} /> },
-  { id: 'phone', label: 'AgentPhone', icon: <Phone size={16} /> },
-  { id: 'desktop2', label: 'Desktop 2', icon: <Monitor size={16} /> },
+  { id: 'phone', label: 'Phone', icon: <Phone size={16} /> },
+  { id: 'settings', label: 'Settings', icon: <Settings size={16} /> },
 ];
 
 export function Sidebar() {

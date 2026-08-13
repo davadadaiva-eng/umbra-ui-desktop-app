@@ -4,7 +4,7 @@ import { useAppStore, type View } from '../stores/appStore';
 import { Send, Sparkles, FileText, Bot } from 'lucide-react';
 import { brainNotes, attachmentNotes, type BrainNote } from '../lib/brain';
 
-const VIEWS: View[] = ['agent', 'recall', 'brain', 'skills', 'vault', 'connectors', 'meetings', 'usage', 'phone', 'devices', 'desktop2', 'settings'];
+const VIEWS: View[] = ['agent', 'brain', 'skills', 'vault', 'connectors', 'meetings', 'usage', 'phone', 'devices', 'settings'];
 
 interface Source {
   id: string;

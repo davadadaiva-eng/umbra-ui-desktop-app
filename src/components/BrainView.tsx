@@ -16,6 +16,7 @@ import {
   FolderOpen,
   Frame,
   Focus,
+  MessagesSquare,
 } from 'lucide-react';
 import { RecallPanel } from './RecallPanel';
 
@@ -116,7 +117,7 @@ export function BrainView({ recallOpen = false, onRecallOpenChange }: { recallOp
   const { agents, profile, journal, clearBrain, avatar, brainFiles } = useAppStore();
   const accent = avatar.accent;
 
-  const [view, setView] = useState<'graph' | 'files'>('graph');
+  const [view, setView] = useState<'graph' | 'files' | 'memory'>('graph');
   const [search, setSearch] = useState('');
   const [tagFilters, setTagFilters] = useState<string[]>([]);
   const [openNoteId, setOpenNoteId] = useState<string | null>(null);
@@ -184,6 +185,20 @@ export function BrainView({ recallOpen = false, onRecallOpenChange }: { recallOp
   );
 
   const journalCapped = useMemo(() => journalNotes.slice(-30), [journalNotes]);
+
+  const memEntries = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    const filtered = q ? journal.filter((e) => e.text.toLowerCase().includes(q)) : journal;
+    return [...filtered].sort((a, b) => b.ts - a.ts).slice(0, 120);
+  }, [journal, search]);
+
+  const fmtTime = (ts: number) => {
+    const d = new Date(ts);
+    const hh = String(d.getHours()).padStart(2, '0');
+    const mm = String(d.getMinutes()).padStart(2, '0');
+    const sameDay = d.toDateString() === new Date().toDateString();
+    return sameDay ? `${hh}:${mm}` : `${d.toLocaleDateString()} ${hh}:${mm}`;
+  };
 
   const allById = useMemo(() => {
     const m = new Map<string, BrainNote>();
@@ -1028,6 +1043,67 @@ export function BrainView({ recallOpen = false, onRecallOpenChange }: { recallOp
         </div>
       </div>
 
+      {/* ---- MEMORY LAYER ---- */}
+      {view === 'memory' && (
+        <div className="absolute inset-0 z-10 overflow-y-auto" style={{ padding: '68px 20px 20px' }}>
+          <div style={{ maxWidth: 860, margin: '0 auto' }}>
+            <div className="mb-5">
+              <h2 className="text-[11px] font-semibold uppercase tracking-[0.18em] mb-2" style={{ color: 'var(--text-dim)' }}>
+                About you
+              </h2>
+              <div className="card p-4" style={{ background: 'var(--surface-1)', border: `1px solid ${accent}33` }}>
+                {profile ? (
+                  <>
+                    <p className="text-sm font-semibold" style={{ color: 'var(--text-primary)', fontFamily: 'var(--font)' }}>{profile.name || 'You'}</p>
+                    {profile.about && (
+                      <p className="text-[12px] font-light mt-1 leading-relaxed" style={{ color: 'var(--text-dim)' }}>{profile.about}</p>
+                    )}
+                    {profile.facts.length > 0 && (
+                      <div className="mt-3 flex flex-wrap gap-1.5">
+                        {profile.facts.map((f, i) => (
+                          <span key={i} className="text-[11px] px-2.5 py-1 rounded-full" style={{ background: `${accent}14`, border: `1px solid ${accent}44`, color: 'var(--text-primary)' }}>
+                            {f}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <p className="text-[12px] font-light" style={{ color: 'var(--text-faint)' }}>
+                    No profile yet — answer the intro questions and everything about you gets stored here.
+                  </p>
+                )}
+              </div>
+            </div>
+
+            <h2 className="text-[11px] font-semibold uppercase tracking-[0.18em] mb-2" style={{ color: 'var(--text-dim)' }}>
+              Conversations · {memEntries.length}
+            </h2>
+            <div className="space-y-1.5">
+              {memEntries.length === 0 && (
+                <p className="text-[12px] font-light py-6 text-center" style={{ color: 'var(--text-faint)' }}>
+                  {search ? 'Nothing matches your search.' : 'Nothing registered yet — every conversation is stored here as it happens.'}
+                </p>
+              )}
+              {memEntries.map((e) => (
+                <div key={e.id} className="card px-4 py-2.5 flex items-start gap-3" style={{ background: 'var(--surface-1)' }}>
+                  <span className="text-[9px] font-mono mt-1 flex-shrink-0" style={{ color: 'var(--text-faint)' }}>{fmtTime(e.ts)}</span>
+                  <span className="text-[9px] font-bold uppercase tracking-widest flex-shrink-0 mt-1" style={{ color: e.type === 'user' ? accent : e.type === 'agent' ? '#7fb3ff' : 'var(--text-faint)', width: 44 }}>
+                    {e.type}
+                  </span>
+                  <p
+                    className="text-[12px] leading-relaxed min-w-0 break-words"
+                    style={{ color: e.type === 'action' ? 'var(--text-faint)' : 'var(--text-primary)', fontStyle: e.type === 'action' ? 'italic' : undefined }}
+                  >
+                    {e.text}
+                  </p>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ---- TOP BAR ---- */}
       <div className="absolute top-3 left-3 right-3 z-20 flex items-center gap-2 pointer-events-none">
         <div
@@ -1050,6 +1126,14 @@ export function BrainView({ recallOpen = false, onRecallOpenChange }: { recallOp
           >
             <FolderOpen size={11} /> Files
           </button>
+          <button
+            onClick={() => setView('memory')}
+            className="flex items-center gap-1.5 px-3 rounded-full transition-colors"
+            style={{ height: 26, color: view === 'memory' ? '#fff' : 'var(--text-dim)', background: view === 'memory' ? `${accent}33` : 'transparent', fontFamily: 'var(--font)', fontSize: 11 }}
+            title="Everything registered about you — conversations & facts"
+          >
+            <MessagesSquare size={11} /> Memory
+          </button>
         </div>
         <div
           className="flex items-center gap-1.5 px-2.5 pointer-events-auto"
@@ -1059,7 +1143,7 @@ export function BrainView({ recallOpen = false, onRecallOpenChange }: { recallOp
           <input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder={view === 'graph' ? 'Filter the graph…' : 'Filter the vault…'}
+            placeholder={view === 'graph' ? 'Filter the graph…' : view === 'memory' ? 'Search memory…' : 'Filter the vault…'}
             className="bg-transparent outline-none text-xs w-full"
             style={{ color: 'var(--text-primary)', fontFamily: 'var(--font)' }}
           />
@@ -1100,7 +1184,7 @@ export function BrainView({ recallOpen = false, onRecallOpenChange }: { recallOp
       </div>
 
       {/* ---- TAG CHIPS ---- */}
-      {allTags.length > 0 && (
+      {view !== 'memory' && allTags.length > 0 && (
         <div className="absolute bottom-4 left-4 z-20 flex flex-wrap gap-1" style={{ maxWidth: '46vw' }}>
           {allTags.map((t) => {
             const on = tagFilters.includes(t);
@@ -1124,6 +1208,7 @@ export function BrainView({ recallOpen = false, onRecallOpenChange }: { recallOp
       )}
 
       {/* ---- ZOOM CONTROLS ---- */}
+      {view !== 'memory' && (
       <div className="absolute bottom-4 right-4 z-20 flex flex-col gap-1.5">
         {[
           {
@@ -1169,6 +1254,7 @@ export function BrainView({ recallOpen = false, onRecallOpenChange }: { recallOp
           </button>
         ))}
       </div>
+      )}
 
       {view === 'graph' && (
         <p className="absolute bottom-2 left-1/2 z-10 pointer-events-none text-[10px]" style={{ transform: 'translateX(-50%)', color: '#555', fontFamily: 'var(--font)', letterSpacing: '0.06em' }}>

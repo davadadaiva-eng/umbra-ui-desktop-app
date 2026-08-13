@@ -6,7 +6,6 @@ import { OnboardingScreen } from './components/OnboardingScreen';
 import { TitleBar } from './components/TitleBar';
 import { Sidebar } from './components/Sidebar';
 import { AgentView } from './components/AgentView';
-import { RecallView } from './components/RecallView';
 import { BrainView } from './components/BrainView';
 import { DevicesView } from './components/DevicesView';
 import { SettingsView } from './components/SettingsView';
@@ -16,13 +15,11 @@ import { ConnectorsView } from './components/ConnectorsView';
 import { MeetingsView } from './components/MeetingsView';
 import { UsageView } from './components/UsageView';
 import { PhoneView } from './components/PhoneView';
-import { Desktop2View } from './components/Desktop2View';
 import { UmbraBar } from './components/UmbraBar';
 import GlitterWrap from './components/GlitterWrap';
 
 const viewComponents: Record<string, React.FC> = {
   agent: AgentView,
-  recall: RecallView,
   brain: BrainView,
   devices: DevicesView,
   skills: SkillsView,
@@ -31,7 +28,6 @@ const viewComponents: Record<string, React.FC> = {
   meetings: MeetingsView,
   usage: UsageView,
   phone: PhoneView,
-  desktop2: Desktop2View,
   settings: SettingsView,
 };
 

@@ -1,7 +1,7 @@
 import { useRef, useEffect, useState } from 'react';
 import gsap from 'gsap';
 import { useAppStore } from '../stores/appStore';
-import { Phone, PhoneOff, Mic, MicOff, Volume2, PhoneIncoming, PhoneOutgoing, PhoneMissed, Plus, Trash2 } from 'lucide-react';
+import { Phone, PhoneOff, Mic, MicOff, Volume2, PhoneIncoming, PhoneOutgoing, PhoneMissed, Plus, Trash2, Copy, Check, UserPlus } from 'lucide-react';
 
 interface Call {
   id: number;
@@ -20,6 +20,8 @@ const SEED: Call[] = [
   { id: 5, name: 'Tax office · AdE', number: '+39 06 · reminder', kind: 'outgoing', time: 'Yesterday', dur: '6m 40s' },
   { id: 6, name: 'Investor · Greycroft', number: '+1 212 · call', kind: 'incoming', time: 'Mon', dur: '23m 18s' },
 ];
+
+const UMBRA_NUMBER = '+1 (415) 555-0128';
 
 const KIND_META: Record<Call['kind'], { icon: typeof PhoneIncoming; color: string }> = {
   incoming: { icon: PhoneIncoming, color: '#22c55e' },
@@ -44,6 +46,34 @@ export function PhoneView() {
   const [onCall, setOnCall] = useState(false);
   const [muted, setMuted] = useState(false);
   const [elapsed, setElapsed] = useState(0);
+  const [copiedNumber, setCopiedNumber] = useState(false);
+
+  const incoming = calls.filter((c) => c.kind === 'incoming').length;
+  const outgoing = calls.filter((c) => c.kind === 'outgoing').length;
+  const missed = calls.filter((c) => c.kind === 'missed').length;
+
+  const copyNumber = () => {
+    void navigator.clipboard?.writeText(UMBRA_NUMBER.replace(/\s/g, ''));
+    setCopiedNumber(true);
+    setTimeout(() => setCopiedNumber(false), 1400);
+  };
+
+  const addToContacts = () => {
+    const vcf = [
+      'BEGIN:VCARD',
+      'VERSION:3.0',
+      'FN:Umbra (AI Assistant)',
+      'ORG:UmbraOS',
+      `TEL;TYPE=CELL:${UMBRA_NUMBER.replace(/\s/g, '')}`,
+      'END:VCARD',
+    ].join('\n');
+    const url = URL.createObjectURL(new Blob([vcf], { type: 'text/vcard' }));
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'umbra.vcf';
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+  };
 
   useEffect(() => {
     const ctx = gsap.context(() => {
@@ -70,9 +100,9 @@ export function PhoneView() {
     <div className="flex flex-col h-full overflow-hidden">
       <div ref={headerRef} className="px-6 py-5 hairline-b flex items-end justify-between gap-4" style={{ background: 'rgba(6,7,9,0.68)', backdropFilter: 'blur(18px)', WebkitBackdropFilter: 'blur(18px)' }}>
         <div>
-          <h1 className="hero-heading font-black uppercase tracking-tight leading-none" style={{ fontSize: 'clamp(1.6rem, 3.5vw, 2.4rem)' }}>AgentPhone</h1>
+          <h1 className="hero-heading font-black uppercase tracking-tight leading-none" style={{ fontSize: 'clamp(1.6rem, 3.5vw, 2.4rem)' }}>Phone</h1>
           <p className="text-sm mt-1 font-light" style={{ color: 'var(--text-dim)' }}>
-            Realtime voice · 48 kHz · ultra-low latency
+            {UMBRA_NUMBER} · inbound & outbound · realtime voice
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -87,6 +117,43 @@ export function PhoneView() {
       </div>
 
       <div ref={bodyRef} className="flex-1 overflow-y-auto px-6 py-5" style={{ maxWidth: 1080, width: '100%', margin: '0 auto' }}>
+        <div className="phone-block card p-5 mb-5" style={{ background: `linear-gradient(135deg, ${avatar.accent}1e, transparent 70%)`, border: `1px solid ${avatar.accent}44` }}>
+          <div className="flex items-center justify-between gap-4 flex-wrap">
+            <div className="flex items-center gap-3">
+              <span className="w-10 h-10 rounded-full flex items-center justify-center" style={{ background: avatar.accent, color: '#fff' }}>
+                <Phone size={16} />
+              </span>
+              <div>
+                <p className="text-[10px] uppercase tracking-widest font-semibold" style={{ color: 'var(--text-faint)' }}>Your Umbra number</p>
+                <p className="text-xl font-bold tabular-nums" style={{ color: 'var(--text-primary)', fontFamily: 'var(--font)' }}>{UMBRA_NUMBER}</p>
+                <p className="text-[11px] font-light" style={{ color: 'var(--text-dim)' }}>
+                  Add it to your contacts, then Umbra can answer inbound calls and dial out.
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <button onClick={copyNumber} className="h-9 px-3.5 rounded-xl flex items-center gap-1.5 text-xs font-medium" style={{ background: 'var(--surface-2)', border: '1px solid var(--hairline-strong)', color: copiedNumber ? '#22c55e' : 'var(--text-primary)', fontFamily: 'var(--font)' }}>
+                {copiedNumber ? <Check size={13} /> : <Copy size={13} />} {copiedNumber ? 'Copied' : 'Copy'}
+              </button>
+              <button onClick={addToContacts} className="h-9 px-3.5 rounded-xl flex items-center gap-1.5 text-xs font-semibold" style={{ background: avatar.accent, color: '#fff', border: 'none', fontFamily: 'var(--font)' }}>
+                <UserPlus size={13} /> Add to contacts
+              </button>
+            </div>
+          </div>
+          <div className="grid grid-cols-3 gap-3 mt-4">
+            {[
+              { label: 'Inbound', value: incoming, color: '#22c55e' },
+              { label: 'Outbound', value: outgoing, color: '#38bdf8' },
+              { label: 'Missed', value: missed, color: '#ef4444' },
+            ].map((s) => (
+              <div key={s.label} className="rounded-xl px-3 py-2.5" style={{ background: 'rgba(0,0,0,0.28)', border: '1px solid var(--hairline)' }}>
+                <p className="text-xl font-bold tabular-nums" style={{ color: s.color, fontFamily: 'var(--font)' }}>{s.value}</p>
+                <p className="text-[10px] uppercase tracking-widest font-semibold" style={{ color: 'var(--text-faint)' }}>{s.label} calls</p>
+              </div>
+            ))}
+          </div>
+        </div>
+
         {onCall && (
           <div className="phone-block card p-5 mb-5" style={{ background: `linear-gradient(135deg, ${avatar.accent}1e, transparent 70%)`, border: `1px solid ${avatar.accent}44` }}>
             <div className="flex items-center justify-between gap-4 flex-wrap">

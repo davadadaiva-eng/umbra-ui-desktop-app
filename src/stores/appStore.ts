@@ -3,7 +3,7 @@ import type { STTConfig } from '../lib/stt';
 import { supabase, signIn, signUp, signOut, sendVerificationCode, verifyEmailCode, sessionToAuthView } from '../lib/auth';
 import type { AuthResult } from '../lib/auth';
 
-export type View = 'agent' | 'recall' | 'brain' | 'devices' | 'skills' | 'vault' | 'connectors' | 'meetings' | 'usage' | 'phone' | 'desktop2' | 'settings';
+export type View = 'agent' | 'brain' | 'devices' | 'skills' | 'vault' | 'connectors' | 'meetings' | 'usage' | 'phone' | 'settings';
 
 export interface AvatarConfig {
   skin: string;
@@ -59,6 +59,17 @@ export interface BrainFile {
   content: string;
 }
 
+export interface AgentUsage {
+  calls: number;
+  tokens: number;
+}
+
+export interface UsageState {
+  totalCalls: number;
+  totalTokens: number;
+  agents: Record<string, AgentUsage>;
+}
+
 const JOURNAL_KEY = 'umbra-journal-v2';
 const PROFILE_KEY = 'umbra-profile-v2';
 const AGENT_NAME_KEY = 'umbra-agent-name-v2';
@@ -71,6 +82,7 @@ const SEED_KEY = 'umbra-seed-v1';
 const BRAIN_KEY = 'umbra-brain-files-v1';
 const STT_KEY = 'umbra-stt-v1';
 const TALKALWAYS_KEY = 'umbra-talkalways-v1';
+const USAGE_KEY = 'umbra-usage-v1';
 const BRAIN_CAP = 300;
 const JOURNAL_CAP = 600;
 
@@ -258,6 +270,30 @@ function saveBrainFiles(files: BrainFile[]) {
   }
 }
 
+function loadUsage(): UsageState {
+  try {
+    const raw = localStorage.getItem(USAGE_KEY);
+    if (!raw) return { totalCalls: 0, totalTokens: 0, agents: {} };
+    const u = JSON.parse(raw);
+    if (!u || typeof u !== 'object') return { totalCalls: 0, totalTokens: 0, agents: {} };
+    return {
+      totalCalls: typeof u.totalCalls === 'number' ? u.totalCalls : 0,
+      totalTokens: typeof u.totalTokens === 'number' ? u.totalTokens : 0,
+      agents: u.agents && typeof u.agents === 'object' ? u.agents : {},
+    };
+  } catch {
+    return { totalCalls: 0, totalTokens: 0, agents: {} };
+  }
+}
+
+function saveUsage(usage: UsageState) {
+  try {
+    localStorage.setItem(USAGE_KEY, JSON.stringify(usage));
+  } catch {
+    // ignore
+  }
+}
+
 function loadProfile(key: string): Profile | null {
   try {
     const raw = localStorage.getItem(key);
@@ -332,6 +368,7 @@ interface AppState {
   profile: Profile | null;
   journal: JournalEntry[];
   brainFiles: BrainFile[];
+  usage: UsageState;
   aiConfig: AIConfig | null;
   sttConfig: STTConfig | null;
   voiceURI: string | null;
@@ -359,6 +396,7 @@ interface AppState {
   addFact: (fact: string) => void;
   addJournal: (type: JournalType, text: string) => void;
   addBrainFile: (name: string, content: string, type?: string) => void;
+  recordUsage: (agentName: string, tokens: number) => void;
   setAIConfig: (config: AIConfig) => void;
   clearAIConfig: () => void;
   setSTTConfig: (config: STTConfig) => void;
@@ -398,6 +436,7 @@ export const useAppStore = create<AppState>((set) => ({
   profile: loadProfile(PROFILE_KEY),
   journal: loadJournal(),
   brainFiles: loadBrainFiles(),
+  usage: loadUsage(),
   aiConfig: loadAIConfig(),
   sttConfig: loadSTTConfig(),
   voiceURI: loadVoiceURI(),
@@ -590,6 +629,21 @@ export const useAppStore = create<AppState>((set) => ({
       const next = [...state.journal, entry].slice(-JOURNAL_CAP);
       saveJournal(next);
       return { journal: next };
+    });
+  },
+
+  recordUsage: (agentName, tokens) => {
+    const t = Math.max(1, Math.round(tokens));
+    set((state) => {
+      const name = agentName || 'Umbra';
+      const cur = state.usage.agents[name] ?? { calls: 0, tokens: 0 };
+      const next: UsageState = {
+        totalCalls: state.usage.totalCalls + 1,
+        totalTokens: state.usage.totalTokens + t,
+        agents: { ...state.usage.agents, [name]: { calls: cur.calls + 1, tokens: cur.tokens + t } },
+      };
+      saveUsage(next);
+      return { usage: next };
     });
   },
 

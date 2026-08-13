@@ -1,15 +1,34 @@
 import { useRef, useEffect, useState } from 'react';
 import gsap from 'gsap';
 import { useAppStore } from '../stores/appStore';
-import { Search, Plus, Copy, Trash2, Lock, Globe, CreditCard, Wifi, KeyRound, Eye, EyeOff, Check } from 'lucide-react';
+import { Search, Plus, Copy, Trash2, Lock, Globe, CreditCard, Wifi, KeyRound, Mail, Eye, EyeOff, Check } from 'lucide-react';
 
 interface VaultItem {
   id: number;
-  kind: 'password' | 'card' | 'note' | 'wifi';
+  kind: 'password' | 'email' | 'card' | 'note' | 'wifi';
   name: string;
   username?: string;
   secret?: string;
   url?: string;
+}
+
+type VaultKind = VaultItem['kind'];
+
+export const VAULT_HASH_KEY = 'umbra-vault-key-v1';
+
+async function hashKey(key: string): Promise<string> {
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode('umbra-vault::' + key));
+  return Array.from(new Uint8Array(buf))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+function loadVaultHash(): string | null {
+  try {
+    return localStorage.getItem(VAULT_HASH_KEY);
+  } catch {
+    return null;
+  }
 }
 
 const SEED: VaultItem[] = [
@@ -25,25 +44,35 @@ const SEED: VaultItem[] = [
   { id: 10, kind: 'wifi', name: 'Umbra HQ · Guest', username: 'umbra-guest', secret: 'Umbra#Guest1', url: 'WPA2-Personal' },
 ];
 
-const KIND_META: Record<VaultItem['kind'], { icon: typeof Globe; label: string }> = {
+const KIND_META: Record<VaultKind, { icon: typeof Globe; label: string }> = {
   password: { icon: KeyRound, label: 'Password' },
+  email: { icon: Mail, label: 'Email' },
   card: { icon: CreditCard, label: 'Card' },
   note: { icon: Lock, label: 'Note' },
   wifi: { icon: Wifi, label: 'WiFi' },
 };
 
+const KIND_OPTIONS: VaultKind[] = ['password', 'email', 'card', 'wifi', 'note'];
+
 export function VaultView() {
   const { avatar } = useAppStore();
   const headerRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
-  const [unlocked, setUnlocked] = useState(false);
+  const [stage, setStage] = useState<'setup' | 'unlock' | 'open'>('setup');
   const [masterKey, setMasterKey] = useState('');
+  const [confirmKey, setConfirmKey] = useState('');
+  const [lockError, setLockError] = useState('');
   const [items, setItems] = useState<VaultItem[]>(SEED);
   const [query, setQuery] = useState('');
   const [revealed, setRevealed] = useState<Set<number>>(new Set());
   const [copied, setCopied] = useState<number | null>(null);
   const [adding, setAdding] = useState(false);
+  const [draftKind, setDraftKind] = useState<VaultKind>('password');
   const [draft, setDraft] = useState<{ name: string; secret: string }>({ name: '', secret: '' });
+
+  useEffect(() => {
+    setStage(loadVaultHash() ? 'unlock' : 'setup');
+  }, []);
 
   useEffect(() => {
     const ctx = gsap.context(() => {
@@ -54,7 +83,58 @@ export function VaultView() {
       }
     }, [headerRef, listRef]);
     return () => ctx.revert();
-  }, [unlocked]);
+  }, [stage]);
+
+  const setupKey = async () => {
+    if (masterKey.length < 8) {
+      setLockError('Use at least 8 characters.');
+      return;
+    }
+    if (masterKey !== confirmKey) {
+      setLockError('The two passwords do not match.');
+      return;
+    }
+    const hash = await hashKey(masterKey);
+    try {
+      localStorage.setItem(VAULT_HASH_KEY, hash);
+    } catch {
+      // ignore
+    }
+    setStage('open');
+    setMasterKey('');
+    setConfirmKey('');
+    setLockError('');
+  };
+
+  const unlock = async () => {
+    const stored = loadVaultHash();
+    if (!stored) {
+      setStage('setup');
+      return;
+    }
+    const hash = await hashKey(masterKey);
+    if (hash !== stored) {
+      setLockError('Wrong master key — try again.');
+      return;
+    }
+    setStage('open');
+    setMasterKey('');
+    setLockError('');
+  };
+
+  const resetVault = () => {
+    if (!window.confirm('Reset the vault? Your master key will be removed and the vault reseeded.')) return;
+    try {
+      localStorage.removeItem(VAULT_HASH_KEY);
+    } catch {
+      // ignore
+    }
+    setItems(SEED);
+    setStage('setup');
+    setMasterKey('');
+    setConfirmKey('');
+    setLockError('');
+  };
 
   const filtered = items.filter((i) => `${i.name} ${i.username} ${i.url}`.toLowerCase().includes(query.toLowerCase()));
 
@@ -69,41 +149,59 @@ export function VaultView() {
 
   const addItem = () => {
     if (!draft.name.trim()) return;
-    setItems((cur) => [...cur, { id: Date.now(), kind: 'password', name: draft.name, secret: draft.secret || '••••', url: '—' }]);
+    setItems((cur) => [...cur, { id: Date.now(), kind: draftKind, name: draft.name, secret: draft.secret || '••••', url: '—' }]);
     setDraft({ name: '', secret: '' });
     setAdding(false);
   };
 
-  if (!unlocked) {
+  if (stage !== 'open') {
     return (
       <div className="flex flex-col h-full items-center justify-center px-6">
         <div className="card w-full max-w-sm p-8 text-center" style={{ background: 'var(--surface-1)' }}>
           <div className="w-14 h-14 rounded-2xl mx-auto flex items-center justify-center mb-4" style={{ background: `${avatar.accent}1c`, color: avatar.accent, border: `1px solid ${avatar.accent}44` }}>
             <Lock size={22} />
           </div>
-          <h1 className="hero-heading font-black uppercase tracking-tight text-xl">Vault Locked</h1>
+          <h1 className="hero-heading font-black uppercase tracking-tight text-xl">{stage === 'setup' ? 'Create your master key' : 'Vault Locked'}</h1>
           <p className="text-xs font-light mt-1 mb-5" style={{ color: 'var(--text-dim)' }}>
-            Everything is encrypted with your master key. This screen never leaves your machine.
+            {stage === 'setup'
+              ? 'Your emails, passwords and credentials live here. Choose a master password only you know — it unlocks the vault on this machine.'
+              : 'Everything is encrypted with your master key. This screen never leaves your machine.'}
           </p>
-          <input
-            type="password"
-            value={masterKey}
-            onChange={(e) => setMasterKey(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && masterKey.length >= 8 && setUnlocked(true)}
-            placeholder="Master key · 8+ characters"
-            className="w-full px-3 py-2.5 rounded-xl outline-none text-center text-sm mb-3"
-            style={{ background: 'var(--surface-2)', border: '1px solid var(--hairline-strong)', color: 'var(--text-primary)', fontFamily: 'var(--font)' }}
-          />
+          <div className="space-y-2 mb-3">
+            <input
+              type="password"
+              value={masterKey}
+              onChange={(e) => setMasterKey(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && (stage === 'setup' ? void setupKey() : void unlock())}
+              placeholder="Master password · 8+ characters"
+              className="w-full px-3 py-2.5 rounded-xl outline-none text-center text-sm"
+              style={{ background: 'var(--surface-2)', border: '1px solid var(--hairline-strong)', color: 'var(--text-primary)', fontFamily: 'var(--font)' }}
+            />
+            {stage === 'setup' && (
+              <input
+                type="password"
+                value={confirmKey}
+                onChange={(e) => setConfirmKey(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && void setupKey()}
+                placeholder="Confirm master password"
+                className="w-full px-3 py-2.5 rounded-xl outline-none text-center text-sm"
+                style={{ background: 'var(--surface-2)', border: '1px solid var(--hairline-strong)', color: 'var(--text-primary)', fontFamily: 'var(--font)' }}
+              />
+            )}
+            {lockError && (
+              <p className="text-[11px] text-center" style={{ color: '#FF6B6B' }}>{lockError}</p>
+            )}
+          </div>
           <button
-            onClick={() => setUnlocked(true)}
+            onClick={() => void (stage === 'setup' ? setupKey() : unlock())}
             disabled={masterKey.length < 8}
             className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-medium disabled:opacity-40 transition-opacity"
             style={{ background: avatar.accent, color: '#fff', border: 'none', fontFamily: 'var(--font)' }}
           >
-            Unlock Vault
+            {stage === 'setup' ? 'Create & unlock' : 'Unlock Vault'}
           </button>
-          <button className="text-[11px] mt-4" style={{ color: 'var(--text-faint)', cursor: 'pointer' }}>
-            Forgot master key?
+          <button className="text-[11px] mt-4" style={{ color: 'var(--text-faint)', cursor: 'pointer' }} onClick={stage === 'setup' ? undefined : resetVault}>
+            {stage === 'setup' ? 'Vault stays on this device' : 'Forgot master key?'}
           </button>
         </div>
       </div>
@@ -138,24 +236,47 @@ export function VaultView() {
 
       <div ref={listRef} className="flex-1 overflow-y-auto px-6 py-5" style={{ maxWidth: 880, width: '100%', margin: '0 auto' }}>
         {adding && (
-          <div className="card p-4 mb-4 flex gap-3" style={{ background: 'var(--surface-1)' }}>
-            <input
-              value={draft.name}
-              onChange={(e) => setDraft((d) => ({ ...d, name: e.target.value }))}
-              placeholder="Name — e.g. Twitter admin"
-              className="flex-1 px-3 py-2 rounded-xl outline-none text-sm"
-              style={{ background: 'var(--surface-2)', border: '1px solid var(--hairline-strong)', color: 'var(--text-primary)', fontFamily: 'var(--font)' }}
-            />
-            <input
-              value={draft.secret}
-              onChange={(e) => setDraft((d) => ({ ...d, secret: e.target.value }))}
-              placeholder="Secret"
-              className="flex-1 px-3 py-2 rounded-xl outline-none text-sm"
-              style={{ background: 'var(--surface-2)', border: '1px solid var(--hairline-strong)', color: 'var(--text-primary)', fontFamily: 'var(--font)' }}
-            />
-            <button onClick={addItem} className="px-4 rounded-xl text-sm" style={{ background: avatar.accent, color: '#fff', border: 'none', fontFamily: 'var(--font)' }}>
-              Save
-            </button>
+          <div className="card p-4 mb-4" style={{ background: 'var(--surface-1)' }}>
+            <div className="flex items-center gap-1.5 mb-3 flex-wrap">
+              {KIND_OPTIONS.map((k) => (
+                <button
+                  key={k}
+                  onClick={() => setDraftKind(k)}
+                  className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium transition-colors"
+                  style={{
+                    background: draftKind === k ? `${avatar.accent}22` : 'var(--surface-2)',
+                    border: `1px solid ${draftKind === k ? avatar.accent + '66' : 'var(--hairline-strong)'}`,
+                    color: draftKind === k ? avatar.accent : 'var(--text-dim)',
+                    fontFamily: 'var(--font)',
+                  }}
+                >
+                  {(() => {
+                    const Icon = KIND_META[k].icon;
+                    return <Icon size={11} />;
+                  })()}
+                  {KIND_META[k].label}
+                </button>
+              ))}
+            </div>
+            <div className="flex gap-3">
+              <input
+                value={draft.name}
+                onChange={(e) => setDraft((d) => ({ ...d, name: e.target.value }))}
+                placeholder="Name — e.g. Twitter admin"
+                className="flex-1 px-3 py-2 rounded-xl outline-none text-sm"
+                style={{ background: 'var(--surface-2)', border: '1px solid var(--hairline-strong)', color: 'var(--text-primary)', fontFamily: 'var(--font)' }}
+              />
+              <input
+                value={draft.secret}
+                onChange={(e) => setDraft((d) => ({ ...d, secret: e.target.value }))}
+                placeholder="Credential"
+                className="flex-1 px-3 py-2 rounded-xl outline-none text-sm"
+                style={{ background: 'var(--surface-2)', border: '1px solid var(--hairline-strong)', color: 'var(--text-primary)', fontFamily: 'var(--font)' }}
+              />
+              <button onClick={addItem} className="px-4 rounded-xl text-sm" style={{ background: avatar.accent, color: '#fff', border: 'none', fontFamily: 'var(--font)' }}>
+                Save
+              </button>
+            </div>
           </div>
         )}
 

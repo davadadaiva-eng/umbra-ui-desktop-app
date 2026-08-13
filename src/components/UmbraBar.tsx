@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
-import { ScanEye, Focus, Send, Mic, MicOff } from 'lucide-react';
+import { ScanEye } from 'lucide-react';
+import { ChatInput, CHIP } from './ui/chat-input';
+import BorderBeam from './ui/border-beam';
 
 type BarState = 'idle' | 'listening' | 'processing' | 'speaking';
 
@@ -18,7 +20,6 @@ export function UmbraBar() {
   const [state, setState] = useState<BarState>('idle');
   const [text, setText] = useState('');
   const [voiceOn, setVoiceOn] = useState(true);
-  const [expanded, setExpanded] = useState(false);
   const channelRef = useRef<BroadcastChannel | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -33,7 +34,6 @@ export function UmbraBar() {
       if (m.type === 'state' && m.state) setState(m.state);
       if (m.type === 'command' && typeof m.text === 'string') {
         setText(m.text);
-        setExpanded(true);
         inputRef.current?.focus();
       }
       if (m.type === 'voice' && typeof m.on === 'boolean') setVoiceOn(m.on);
@@ -67,119 +67,91 @@ export function UmbraBar() {
   const stateColor =
     state === 'listening' ? '#22D3EE' : state === 'speaking' || state === 'processing' ? '#A78BFA' : '#3B82F6';
 
+  const scanChip: React.CSSProperties = {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 24,
+    height: 24,
+    padding: 0,
+    border: 'none',
+    cursor: 'pointer',
+    color: 'rgba(255,255,255,0.75)',
+    ...CHIP,
+  };
+
   return (
     <>
       <style>{barStyles()}</style>
       <div
-        className="flex items-center gap-2 px-3 rounded-2xl"
+        className="flex items-center justify-center"
         style={{
           height: '100%',
-          background: 'rgba(10,12,16,0.72)',
-          border: '1px solid rgba(255,255,255,0.09)',
-          backdropFilter: 'blur(20px)',
-          WebkitBackdropFilter: 'blur(20px)',
-          boxShadow: '0 12px 40px rgba(0,0,0,0.5)',
+          padding: '0 14px',
           ...appRegion('drag'),
           userSelect: 'none',
           fontFamily: 'ui-sans-serif, system-ui, sans-serif',
         }}
       >
-      <div
-        className="relative flex-shrink-0"
-        style={{
-          ...appRegion('no-drag'),
-          width: 20,
-          height: 20,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-        }}
-      >
-        <span
-          className="absolute rounded-full"
+        <div
+          className="relative flex-shrink-0"
           style={{
+            ...appRegion('drag'),
             width: 20,
             height: 20,
-            background: state === 'listening' ? 'radial-gradient(circle, rgba(34,211,238,0.5), rgba(34,211,238,0.05) 70%)' : `radial-gradient(circle, ${stateColor}44, transparent 70%)`,
-            animation: state === 'listening' ? 'umbra-ping 1.4s infinite' : state === 'idle' ? 'umbra-breathe 3s infinite' : 'none',
+            marginRight: 12,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
           }}
-        />
-        <div
-          className="rounded-full flex items-center justify-center"
-          style={{
-            width: 12,
-            height: 12,
-            background: stateColor,
-            boxShadow: `0 0 ${state === 'speaking' || state === 'processing' ? 14 : 8}px ${stateColor}aa`,
-            animation: state === 'idle' ? 'umbra-breathe 3s infinite' : 'none',
-          }}
-        />
-      </div>
-
-      <input
-        ref={inputRef}
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter') submit();
-          if (e.key === 'Escape') setText('');
-        }}
-        onFocus={() => setExpanded(true)}
-        onBlur={() => setExpanded(false)}
-        placeholder="Ask Umbra, give tasks, or query screen…"
-        spellCheck={false}
-        style={{
-          ...appRegion('no-drag'),
-          flex: 1,
-          minWidth: 0,
-          background: 'transparent',
-          border: 'none',
-          outline: 'none',
-          color: '#E5E7EB',
-          fontSize: 13,
-          padding: '0 4px',
-        }}
-      />
-
-      {expanded && (
-        <div className="flex items-center gap-1.5" style={{ ...appRegion('no-drag') }}>
-          <button onClick={analyze} title="Analyze screen" style={quickBtn}>
-            <ScanEye size={14} />
-          </button>
-          <button onClick={takeOver} title="Take over the main window" style={quickBtn}>
-            <Focus size={14} />
-          </button>
-          <button
-            onClick={toggleVoice}
-            title={voiceOn ? 'Voice mode on — say the agent name' : 'Voice mode off'}
-            style={{ ...quickBtn, color: voiceOn ? '#22D3EE' : 'rgba(255,255,255,0.35)' }}
-          >
-            {voiceOn ? <Mic size={14} /> : <MicOff size={14} />}
-          </button>
+        >
+          <span
+            className="absolute rounded-full"
+            style={{
+              width: 20,
+              height: 20,
+              background: state === 'listening' ? 'radial-gradient(circle, rgba(34,211,238,0.5), rgba(34,211,238,0.05) 70%)' : `radial-gradient(circle, ${stateColor}44, transparent 70%)`,
+              animation: state === 'listening' ? 'umbra-ping 1.4s infinite' : state === 'idle' ? 'umbra-breathe 3s infinite' : 'none',
+            }}
+          />
+          <div
+            className="rounded-full flex items-center justify-center"
+            style={{
+              width: 12,
+              height: 12,
+              background: stateColor,
+              boxShadow: `0 0 ${state === 'speaking' || state === 'processing' ? 14 : 8}px ${stateColor}aa`,
+              animation: state === 'idle' ? 'umbra-breathe 3s infinite' : 'none',
+            }}
+          />
         </div>
-      )}
 
-      <button onClick={submit} title="Send to Umbra" style={{ ...quickBtn, color: text.trim() ? '#fff' : 'rgba(255,255,255,0.35)' }}>
-        <Send size={14} />
-      </button>
-    </div>
+        <div style={{ ...appRegion('no-drag') }}>
+          <BorderBeam size="md" colorVariant="colorful">
+            <ChatInput
+              value={text}
+              onValueChange={setText}
+              onEnter={submit}
+              onEscape={() => setText('')}
+              onSend={submit}
+              placeholder="Ask Umbra, give tasks, or query screen…"
+              inputRef={inputRef}
+              onMention={() => inputRef.current?.focus()}
+              agent={{ onClick: takeOver, title: 'Take over the main window' }}
+              auto={{ active: voiceOn, onClick: toggleVoice, title: voiceOn ? 'Voice mode on — say the agent name' : 'Voice mode off' }}
+              extraChips={
+                <button type="button" onClick={analyze} title="Analyze screen" style={scanChip}>
+                  <ScanEye size={14} />
+                </button>
+              }
+              sendColor={stateColor}
+            />
+          </BorderBeam>
+        </div>
+      </div>
     </>
   );
 }
-
-const quickBtn: React.CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  width: 26,
-  height: 26,
-  borderRadius: 9,
-  border: '1px solid rgba(255,255,255,0.08)',
-  background: 'rgba(255,255,255,0.05)',
-  color: 'rgba(255,255,255,0.75)',
-  cursor: 'pointer',
-  transition: 'background 0.15s',
-};
 
 export function barStyles() {
   return `

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import gsap from 'gsap';
 import { useAppStore, type View } from '../stores/appStore';
 import { aiChat, DEFAULT_AI, providerById } from '../lib/ai';
@@ -7,13 +7,12 @@ import { isVoiceStudioOnline, isVoiceboxOnline, speakWithVoiceStudio, speakWithV
 import ParticleSphere from './ParticleSphere';
 import { BrainView } from './BrainView';
 import {
-  Mic, ArrowUp, Volume2, Square, Sparkles, AudioLines, ChevronLeft, ChevronRight, Trash2, MessageSquare, X,
+  Mic, ArrowUp, Volume2, Square, ChevronLeft, ChevronRight, Trash2,
 } from 'lucide-react';
 
 const viewMap: { id: View; label: string; keys: string[] }[] = [
   { id: 'agent', label: 'the agent page', keys: ['agent'] },
-  { id: 'recall', label: 'recall', keys: ['recall', 'files', 'memory'] },
-  { id: 'brain', label: 'the brain', keys: ['brain', 'mind', 'graph', 'notes'] },
+  { id: 'brain', label: 'the brain', keys: ['brain', 'mind', 'graph', 'notes', 'memory'] },
   { id: 'skills', label: 'the skill matrix', keys: ['skills', 'skill matrix', 'skillset'] },
   { id: 'vault', label: 'the vault', keys: ['vault', 'passwords', 'secrets'] },
   { id: 'connectors', label: 'connectors', keys: ['connectors', 'mcp', 'connections', 'plugins'] },
@@ -21,7 +20,6 @@ const viewMap: { id: View; label: string; keys: string[] }[] = [
   { id: 'usage', label: 'usage', keys: ['usage', 'stats', 'cost', 'telemetry'] },
   { id: 'phone', label: 'agent phone', keys: ['phone', 'agentphone', 'calls', 'voice calls'] },
   { id: 'devices', label: 'devices', keys: ['devices', 'mobile'] },
-  { id: 'desktop2', label: 'desktop two', keys: ['desktop two', 'desktop 2', 'second desktop', 'local store'] },
   { id: 'settings', label: 'settings', keys: ['settings', 'preferences'] },
 ];
 
@@ -134,12 +132,11 @@ const cleanName = (t: string) =>
     .slice(0, 24);
 
 export function AgentView() {
-  const { user, avatar, avatarName, namedMain, agents, focusedAgentId, profile, aiConfig, voiceURI, voiceboxProfile, journal, sttConfig, talkAlways, setProfile, setAvatarName, markNamedMain, setView, addAgent, removeAgent, addJournal, addFact, focusAgent, addBrainFile } = useAppStore();
+  const { user, avatar, avatarName, namedMain, agents, focusedAgentId, profile, aiConfig, voiceURI, voiceboxProfile, sttConfig, talkAlways, setProfile, setAvatarName, markNamedMain, setView, addAgent, removeAgent, addJournal, addFact, focusAgent, addBrainFile } = useAppStore();
   const crew = [null, ...agents] as (NonNullable<typeof agents>[number] | null)[];
   const focusIdx = Math.max(0, crew.findIndex((a) => a && a.id === focusedAgentId));
   const focusedAgent = crew[focusIdx] ?? null;
   const accent = focusedAgent?.accent ?? avatar.accent;
-      const effConfig = aiConfig ?? DEFAULT_AI;
   const SPHERE_D = '40vmin';
   const RING_RADIUS = 44;
   const RING_DIP = 10;
@@ -147,7 +144,6 @@ export function AgentView() {
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [wakeOn, setWakeOn] = useState(false);
   const [input, setInput] = useState('');
-  const [lastLine, setLastLine] = useState('');
   const [introStep, setIntroStep] = useState<IntroStep>('idle');
   const [status, setStatus] = useState<{ kind: StatusKind; text: string }>({
     kind: 'idle',
@@ -160,9 +156,8 @@ export function AgentView() {
   const [namePrompt, setNamePrompt] = useState<null | { mode: 'main' } | { mode: 'new' }>(null);
   const [nameDraft, setNameDraft] = useState('');
   const [taskDraft, setTaskDraft] = useState('');
-  const [transcriptOpen, setTranscriptOpen] = useState(true);
   const [isRecording, setIsRecording] = useState(false);
-  const [proposal, setProposal] = useState<{ name: string; task: string } | null>(null);
+  const [, setProposal] = useState<{ name: string; task: string } | null>(null);
   const chatTokenRef = useRef(0);
 
   useEffect(() => {
@@ -193,7 +188,6 @@ export function AgentView() {
   const recTimeoutRef = useRef(0);
   const silenceRafRef = useRef(0);
   const spawnProposalRef = useRef<{ name: string; task: string } | null>(null);
-  const transcriptEndRef = useRef<HTMLDivElement>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
@@ -352,7 +346,6 @@ export function AgentView() {
   const speak = useCallback(
     (text: string) => {
       const t = text.trim();
-      setLastLine(t);
       try {
         addJournal('agent', t);
         if (t) addBrainFile(`umbra_talk_${Date.now()}.md`, t, 'text/markdown');
@@ -484,15 +477,6 @@ export function AgentView() {
       void audioCtxRef.current?.close();
     };
   }, [stopSpeaking]);
-
-  const transcript = useMemo(
-    () => journal.filter((e) => e.type === 'user' || e.type === 'agent' || e.type === 'action').slice(-80),
-    [journal]
-  );
-
-  useEffect(() => {
-    transcriptEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
-  }, [journal]);
 
   const spawnAgent = useCallback(
     (raw?: string, customName?: string) => {
@@ -706,10 +690,7 @@ export function AgentView() {
         if (viewHit) {
           if (viewHit.id === 'brain') openBrain();
           else if (viewHit.id === 'devices') setView('devices');
-          else if (viewHit.id === 'recall') {
-            setRecallOpen(true);
-            openBrain();
-          } else setView(viewHit.id);
+          else setView(viewHit.id);
           setStatus({ kind: 'busy', text: `→ ${viewHit.label}` });
           addJournal('action', `Opened ${viewHit.label}`);
           speak(`Opening ${viewHit.label}.`);
@@ -743,10 +724,7 @@ export function AgentView() {
         if (v.keys.some((k) => cmd.includes(k)) && /(open|go|take|show|navigate|switch|start)/.test(cmd)) {
         if (v.id === 'brain') openBrain();
         else if (v.id === 'devices') setView('devices');
-        else if (v.id === 'recall') {
-          setRecallOpen(true);
-          openBrain();
-        } else setView(v.id);
+        else setView(v.id);
           setStatus({ kind: 'busy', text: `→ ${v.label}` });
           addJournal('action', `Opened ${v.label}`);
           speak(`Opening ${v.label}.`);
@@ -762,7 +740,7 @@ export function AgentView() {
       }
       return false;
     },
-    [stopSpeaking, speak, setView, spawnAgent, goAgent, openBrain, agents, user?.name, addJournal, setRecallOpen]
+    [stopSpeaking, speak, setView, spawnAgent, goAgent, openBrain, agents, user?.name, addJournal]
   );
 
   const introAnswer = (text: string) => {
@@ -875,6 +853,7 @@ export function AgentView() {
         } catch {
           // ignore
         }
+        useAppStore.getState().recordUsage(selfName, Math.ceil((text.length + reply.length) / 4));
         setStatus({ kind: 'idle', text: `answered via ${providerById(effConfig.provider).label}` });
       } catch (e) {
         if (token !== chatTokenRef.current) return;
@@ -1404,51 +1383,6 @@ export function AgentView() {
         <div ref={sphereRef} className="absolute inset-0" style={{ transformOrigin: 'center' }}>
           <div ref={pulseRef} className="absolute inset-0" style={{ transformOrigin: 'center' }}>
             <div className="absolute" style={{ left: 'calc(50% - 20vmin)', top: '40%' }}>
-              {lastLine && (
-                <div
-                  className="absolute pointer-events-none"
-                  style={{
-                    left: '50%',
-                    top: 0,
-                    transform: 'translate(-50%, calc(-100% - 22vmin))',
-                    zIndex: 200,
-                  }}
-                >
-                  <div
-                    className="relative rounded-2xl px-4 py-2.5 text-sm font-light leading-snug"
-                    style={{
-                      maxWidth: 'min(46vw, 460px)',
-                      maxHeight: '16vh',
-                      overflow: 'hidden',
-                      background: 'rgba(10,12,16,0.92)',
-                      border: `1px solid ${accent}55`,
-                      color: 'var(--text-primary)',
-                      backdropFilter: 'blur(14px)',
-                      WebkitBackdropFilter: 'blur(14px)',
-                      boxShadow: '0 12px 40px rgba(0,0,0,0.45)',
-                      display: '-webkit-box',
-                      WebkitLineClamp: 3,
-                      WebkitBoxOrient: 'vertical',
-                      fontFamily: 'var(--font)',
-                    }}
-                  >
-                    {lastLine}
-                    <div
-                      className="absolute"
-                      style={{
-                        left: '50%',
-                        bottom: -5,
-                        width: 10,
-                        height: 10,
-                        transform: 'translateX(-50%) rotate(45deg)',
-                        background: 'rgba(10,12,16,0.92)',
-                        borderRight: '1px solid var(--hairline-strong)',
-                        borderBottom: '1px solid var(--hairline-strong)',
-                      }}
-                    />
-                  </div>
-                </div>
-              )}
               {crew.map((agent, i) => {
                 const o = i - focusIdx;
                 const isMain = !agent;
@@ -1661,11 +1595,6 @@ export function AgentView() {
                   <ChevronLeft size={12} /> {avatarName}
                 </button>
               )}
-              {effConfig && (
-                <span className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-widest px-3 py-1.5 rounded-full pointer-events-auto" style={{ color: '#81C784', border: '1px solid rgba(129,199,132,0.3)' }}>
-                  <Sparkles size={11} /> {providerById(effConfig.provider).label} engine
-                </span>
-              )}
               {introMode && (
                 <span
                   className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-widest px-3 py-1.5 rounded-full"
@@ -1687,16 +1616,6 @@ export function AgentView() {
         </div>
 
         <div className="flex items-center gap-1.5 pointer-events-auto">
-          {!space && (
-            <button
-              className="btn-ghost flex items-center gap-1.5"
-              style={{ height: 32, fontSize: 12, color: transcriptOpen ? avatar.accent : undefined }}
-              onClick={() => setTranscriptOpen((o) => !o)}
-              title="Crew conversation"
-            >
-              <MessageSquare size={12} /> {transcriptOpen ? 'Hide chat' : 'Chat'}
-            </button>
-          )}
           {isSpeaking && (
             <button className="btn-ghost" style={{ height: 32, fontSize: 12 }} onClick={stopSpeaking}>
               <Square size={12} /> Stop
@@ -1704,93 +1623,6 @@ export function AgentView() {
           )}
         </div>
       </header>
-
-      {!space && transcriptOpen && (
-        <div
-          className="absolute z-30 flex flex-col rounded-2xl overflow-hidden"
-          style={{
-            right: 16,
-            top: 72,
-            bottom: 128,
-            width: 330,
-            maxWidth: '34vw',
-            background: 'rgba(10,11,14,0.84)',
-            border: '1px solid var(--hairline-strong)',
-            backdropFilter: 'blur(18px)',
-            WebkitBackdropFilter: 'blur(18px)',
-            boxShadow: '0 20px 60px rgba(0,0,0,0.5)',
-          }}
-        >
-          <div className="flex items-center justify-between px-4 py-3 hairline-b">
-            <p className="text-[11px] font-semibold uppercase tracking-widest" style={{ color: 'var(--text-dim)' }}>
-              Crew conversation
-            </p>
-            <button
-              onClick={() => setTranscriptOpen(false)}
-              className="btn-ghost"
-              style={{ width: 26, height: 26, padding: 0, color: 'var(--text-faint)' }}
-              title="Hide"
-            >
-              <X size={13} />
-            </button>
-          </div>
-          <div className="flex-1 overflow-y-auto px-3 py-3 space-y-2.5">
-            {transcript.length === 0 && (
-              <p className="text-xs font-light text-center py-6" style={{ color: 'var(--text-faint)' }}>
-                Say something to start the conversation.
-              </p>
-            )}
-            {transcript.map((e) => {
-              const isUser = e.type === 'user';
-              const isAction = e.type === 'action';
-              return (
-                <div key={e.id} className="flex flex-col">
-                  <p
-                    className="text-[10px] font-medium uppercase tracking-widest"
-                    style={{ color: isUser ? accent : isAction ? 'var(--text-faint)' : avatar.accent }}
-                  >
-                    {isUser ? 'you' : isAction ? '·' : avatarName}
-                  </p>
-                  <p
-                    className="text-[13px] leading-snug break-words"
-                    style={{
-                      color: isAction ? 'var(--text-faint)' : 'var(--text-primary)',
-                      fontStyle: isAction ? 'italic' : undefined,
-                      opacity: isAction ? 0.8 : 1,
-                    }}
-                  >
-                    {e.text}
-                  </p>
-                </div>
-              );
-            })}
-            <div ref={transcriptEndRef} />
-          </div>
-          {proposal && (
-            <div className="px-4 py-2.5 flex items-center gap-2" style={{ borderTop: '1px solid var(--hairline)' }}>
-              <span className="text-[11px] font-light" style={{ color: 'var(--text-dim)' }}>
-                Spawn <span style={{ color: accent }}>{proposal.name}</span> — {proposal.task}? Say <b>yes</b>.
-              </span>
-            </div>
-          )}
-        </div>
-      )}
-
-      {!space && (
-        <div className="absolute inset-0 pointer-events-none" style={{ opacity: Math.max(0, 1 - slide * 1.1) }}>
-          <div
-            className="absolute flex items-center gap-1.5 rounded-full px-4"
-            style={{ right: 24, top: '50%', transform: 'translateY(-50%)', height: 44, background: 'var(--veil)', border: '1px solid var(--hairline-strong)', color: 'var(--text-dim)', backdropFilter: 'blur(16px)', cursor: 'pointer', fontFamily: 'var(--font)', fontSize: 12, zIndex: 30, pointerEvents: 'auto' }}
-            onClick={openBrain}
-            title="Open the brain — or drag right"
-            onMouseEnter={(e) => (e.currentTarget.style.borderColor = `${avatar.accent}88`)}
-            onMouseLeave={(e) => (e.currentTarget.style.borderColor = 'var(--hairline-strong)')}
-          >
-            <span className="uppercase tracking-widest font-medium">Brain</span>
-            <ChevronRight size={15} />
-          </div>
-        </div>
-      )}
 
       {(space === 'brain' || slide > 0.005) && (
         <div
@@ -1830,23 +1662,6 @@ export function AgentView() {
               title={sttConfig?.apiKey ? (isRecording ? 'Stop recording' : 'Talk to Umbra — tap, speak, done') : 'Talk to Umbra — tap, speak, done'}
             >
               <Mic size={17} />
-            </button>
-
-            <button
-              className="flex-shrink-0 flex items-center gap-1.5 rounded-full px-3.5 transition-colors"
-              style={{
-                height: 44,
-                background: wakeOn ? `${accent}1e` : 'var(--veil)',
-                border: `1px solid ${wakeOn ? accent + '66' : 'var(--hairline-strong)'}`,
-                color: wakeOn ? accent : 'var(--text-dim)',
-                fontFamily: 'var(--font)',
-                fontSize: 11,
-              }}
-              onClick={wakeOn ? stopWake : startWake}
-              title={wakeOn ? 'Stop listening' : "Always listen — then just say your agent's name"}
-            >
-              <AudioLines size={15} />
-              <span className="uppercase tracking-widest font-medium">{wakeOn ? 'wake · on' : 'wake'}</span>
             </button>
 
             <div

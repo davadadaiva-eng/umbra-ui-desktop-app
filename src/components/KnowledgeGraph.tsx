@@ -26,7 +26,7 @@ interface GraphNode {
 
 type Edge = [string, string];
 
-const VIEWS: View[] = ['agent', 'recall', 'brain', 'skills', 'vault', 'connectors', 'meetings', 'usage', 'phone', 'devices', 'desktop2', 'settings'];
+const VIEWS: View[] = ['agent', 'brain', 'skills', 'vault', 'connectors', 'meetings', 'usage', 'phone', 'devices', 'settings'];
 const REST_LEN = 170;
 
 const labelOf = (id: string) => id.charAt(0).toUpperCase() + id.slice(1);
@@ -67,11 +67,11 @@ function buildGraph(agents: AgentLike[], accent: string, files: { id: string; na
   });
 
   for (const v of VIEWS) if (v !== 'agent') edges.push(['agent', v]);
-  edges.push(['brain', 'recall'], ['devices', 'brain']);
+  edges.push(['devices', 'brain']);
   agents.forEach((a) => {
     edges.push(['agent', `agent-${a.id}`], ['brain', `agent-${a.id}`]);
   });
-  files.forEach((f) => edges.push(['recall', `file-${f.id}`]));
+  files.forEach((f) => edges.push(['brain', `file-${f.id}`]));
 
   for (let it = 0; it < 140; it++) {
     for (const n of nodes) {

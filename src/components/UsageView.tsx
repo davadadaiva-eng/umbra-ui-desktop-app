@@ -17,25 +17,22 @@ function maxIndex(arr: number[]) {
   return arr.indexOf(Math.max(...arr));
 }
 
-const AGENTS = [
-  { id: 'tax-ai', name: 'tax-ai', pct: 32, color: '#f59e0b', calls: '148K' },
-  { id: 'emilkowalski', name: 'emilkowalski/skill', pct: 21, color: '#818cf8', calls: '97K' },
-  { id: 'shadcn-ui', name: 'shadcn-ui', pct: 15, color: '#34d399', calls: '69K' },
-  { id: 'agentphone', name: 'agentphone', pct: 12, color: '#f472b6', calls: '55K' },
-  { id: 'hyperfx-ai', name: 'hyperfx-ai', pct: 9, color: '#22d3ee', calls: '41K' },
-  { id: 'support-ai', name: 'support-ai', pct: 6, color: '#a3e635', calls: '27K' },
-  { id: 'Other', name: 'Other skills', pct: 5, color: '#64748b', calls: '23K' },
-];
+const AGENT_COLORS = ['#f59e0b', '#818cf8', '#34d399', '#f472b6', '#22d3ee', '#a3e635', '#64748b', '#60a5fa', '#fb7185', '#fbbf24'];
 
 export function UsageView() {
-  const { avatar } = useAppStore();
+  const { avatar, usage } = useAppStore();
   const headerRef = useRef<HTMLDivElement>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
   const [range, setRange] = useState<'30d' | '90d' | '12m'>('30d');
   const series = useRef(buildSeries()).current;
   const peak = maxIndex(series);
-  const sum = series.reduce((a, b) => a + b, 0);
-  const prev = Math.round(sum * 1.24);
+  const agentRows = Object.entries(usage.agents)
+    .map(([name, u]) => ({ name, calls: u.calls, tokens: u.tokens }))
+    .sort((a, b) => b.tokens - a.tokens);
+  const maxAgentTokens = Math.max(1, ...agentRows.map((a) => a.tokens));
+  const creditsUsed = Math.ceil(usage.totalTokens / 1000);
+  const estCost = creditsUsed * 0.01;
+  const avgTokens = usage.totalCalls ? Math.round(usage.totalTokens / usage.totalCalls) : 0;
 
   useEffect(() => {
     const ctx = gsap.context(() => {
@@ -85,10 +82,10 @@ export function UsageView() {
       <div ref={bodyRef} className="flex-1 overflow-y-auto px-6 py-5" style={{ maxWidth: 1040, width: '100%', margin: '0 auto' }}>
         <div className="usage-block grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">
           {[
-            { label: 'Total calls · {TOTAL_DAYS}d'.replace('{TOTAL_DAYS}', TOTAL_DAYS.toString()), value: sum.toLocaleString('en-US'), sub: `${prev.toLocaleString('en-US')} projected`, delta: -18, good: true },
-            { label: 'Avg response', value: '1.42s', sub: 'p95 · 2.9s', delta: -6, good: true },
-            { label: 'Est. cost', value: '$142.80', sub: '$0.0015 / skill call', delta: 3, good: false },
-            { label: 'Context window', value: '92%', sub: 'utilized / agent', delta: 1, good: false },
+            { label: 'Total calls', value: usage.totalCalls.toLocaleString('en-US'), sub: `${agentRows.length} agent${agentRows.length === 1 ? '' : 's'} active`, good: true },
+            { label: 'Credits used', value: creditsUsed.toLocaleString('en-US'), sub: `${avgTokens.toLocaleString('en-US')} tokens / call`, good: true },
+            { label: 'Est. cost', value: `$${estCost.toFixed(2)}`, sub: '$0.01 per 1,000 tokens', good: false },
+            { label: 'Active agents', value: String(agentRows.length), sub: 'on this device', good: true },
           ].map((k) => (
             <div key={k.label} className="card p-4" style={{ background: 'var(--surface-1)' }}>
               <p className="text-[10px] uppercase tracking-wide font-semibold" style={{ color: 'var(--text-faint)' }}>{k.label}</p>
@@ -143,21 +140,29 @@ export function UsageView() {
               <span className="w-8 h-8 rounded-lg flex items-center justify-center" style={{ background: 'var(--surface-2)', color: avatar.accent, border: '1px solid var(--hairline-strong)' }}>
                 <CircleDollarSign size={14} />
               </span>
-              <p className="text-sm font-semibold" style={{ color: 'var(--text-primary)', fontFamily: 'var(--font)' }}>Cost by agent</p>
+              <p className="text-sm font-semibold" style={{ color: 'var(--text-primary)', fontFamily: 'var(--font)' }}>Usage by agent</p>
             </div>
-            <div className="space-y-3">
-              {AGENTS.map((a) => (
-                <div key={a.id}>
-                  <div className="flex items-center justify-between text-[11px] mb-1">
-                    <span className="font-mono truncate" style={{ color: 'var(--text-dim)' }}>{a.name}</span>
-                    <span className="flex-shrink-0" style={{ color: 'var(--text-faint)' }}>{a.calls} · {a.pct}%</span>
+            {agentRows.length === 0 ? (
+              <p className="text-[12px] font-light leading-relaxed" style={{ color: 'var(--text-faint)' }}>
+                No usage yet — talk to your agents (or your crew) and the calls, tokens and credits will show up here.
+              </p>
+            ) : (
+              <div className="space-y-3">
+                {agentRows.map((a, i) => (
+                  <div key={a.name}>
+                    <div className="flex items-center justify-between text-[11px] mb-1">
+                      <span className="font-mono truncate" style={{ color: 'var(--text-dim)' }}>{a.name}</span>
+                      <span className="flex-shrink-0" style={{ color: 'var(--text-faint)' }}>
+                        {a.calls} calls · {(a.tokens / 1000).toFixed(1)}k tokens
+                      </span>
+                    </div>
+                    <div className="w-full rounded-full overflow-hidden" style={{ height: 6, background: 'var(--surface-3)' }}>
+                      <div className="rounded-full" style={{ width: `${(a.tokens / maxAgentTokens) * 100}%`, height: '100%', background: AGENT_COLORS[i % AGENT_COLORS.length] }} />
+                    </div>
                   </div>
-                  <div className="w-full rounded-full overflow-hidden" style={{ height: 6, background: 'var(--surface-3)' }}>
-                    <div className="rounded-full" style={{ width: `${a.pct * 3}%`, height: '100%', background: a.color }} />
-                  </div>
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+            )}
           </div>
 
           <div className="usage-block card p-5" style={{ background: 'var(--surface-1)' }}>
