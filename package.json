@@ -10,7 +10,10 @@
     "lint": "oxlint",
     "preview": "vite preview",
     "desktop": "concurrently -k -s first \"vite\" \"wait-on http://localhost:5173 && cross-env VITE_DEV_SERVER_URL=http://localhost:5173 electron .\"",
-    "desktop:pack": "npm run build && electron-builder"
+    "desktop:full": "npm run build:backend && npm run desktop",
+    "desktop:pack": "npm run build && electron-builder",
+    "build:backend": "cd \"../umbra\" && npm run build",
+    "dev:backend": "cd \"../umbra\" && npm run dev"
   },
   "build": {
     "appId": "com.umbra.os",
@@ -36,11 +39,14 @@
     "@supabase/supabase-js": "^2.112.3",
     "@types/three": "^0.185.1",
     "border-beam": "^1.3.0",
+    "clsx": "^2.1.1",
     "framer-motion": "^12.43.0",
     "gsap": "^3.15.0",
     "lucide-react": "^1.28.0",
+    "ogl": "^1.0.11",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
+    "tailwind-merge": "^3.6.0",
     "three": "^0.185.1",
     "zustand": "^5.0.14"
   },

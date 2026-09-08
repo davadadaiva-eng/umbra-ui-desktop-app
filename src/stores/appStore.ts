@@ -2,8 +2,10 @@ import { create } from 'zustand';
 import type { STTConfig } from '../lib/stt';
 import { supabase, signIn, signUp, signOut, sendVerificationCode, verifyEmailCode, sessionToAuthView } from '../lib/auth';
 import type { AuthResult } from '../lib/auth';
+import { isBackendAvailable, getStatus, getConsent, type BackendStatus, type Task } from '../lib/backend';
+import { connect, disconnect, onEvent, onSnapshot, onAnyEvent, onDisconnect } from '../lib/backendWs';
 
-export type View = 'agent' | 'brain' | 'devices' | 'skills' | 'vault' | 'connectors' | 'meetings' | 'usage' | 'phone' | 'settings';
+export type View = 'agent' | 'brain' | 'devices' | 'smarthome' | 'skills' | 'vault' | 'connectors' | 'meetings' | 'usage' | 'phone' | 'settings';
 
 export interface AvatarConfig {
   skin: string;
@@ -378,6 +380,12 @@ interface AppState {
   currentView: View;
   isSidebarCollapsed: boolean;
   talkAlways: boolean;
+  backendOnline: boolean;
+  backendStatus: BackendStatus | null;
+  activeTasks: Task[];
+  connectBackend: () => void;
+  disconnectBackend: () => void;
+  refreshBackendStatus: () => Promise<void>;
   initializeAuth: () => Promise<void>;
   login: (email: string, password: string) => Promise<AuthResult>;
   signup: (name: string, email: string, password: string) => Promise<AuthResult>;
@@ -410,6 +418,22 @@ interface AppState {
   setAgentStatus: (id: string, status: Agent['status']) => void;
   focusAgent: (id: string | null) => void;
   seedTestBrain: () => void;
+
+  // Backend integration
+  backendApiKey: string | null;
+  setBackendApiKey: (key: string | null) => void;
+
+  // Screen awareness
+  screenWatching: boolean;
+  screenState: Record<string, unknown> | null;
+  setScreenWatching: (on: boolean) => void;
+
+  // Consent
+  consentState: { granted: boolean; denied: boolean; askOncePerSession: boolean; emergencyStopArmed: boolean } | null;
+  refreshConsent: () => Promise<void>;
+
+  // Live tasks from WebSocket
+  liveTasks: Task[];
 }
 
 export const defaultAvatar: AvatarConfig = {
@@ -446,8 +470,178 @@ export const useAppStore = create<AppState>((set) => ({
   currentView: 'agent',
   isSidebarCollapsed: false,
   talkAlways: loadTalkAlways(),
+  backendOnline: false,
+  backendStatus: null,
+  activeTasks: [],
+  backendApiKey: localStorage.getItem('umbra-backend-apikey') || null,
+  screenWatching: false,
+  screenState: null,
+  consentState: null,
+  liveTasks: [],
+
+  setBackendApiKey: (key) => {
+    set({ backendApiKey: key });
+    try {
+      if (key) localStorage.setItem('umbra-backend-apikey', key);
+      else localStorage.removeItem('umbra-backend-apikey');
+    } catch { /* ignore */ }
+  },
+
+  setScreenWatching: (on) => {
+    set({ screenWatching: on });
+  },
+
+  refreshConsent: async () => {
+    try {
+      if (await isBackendAvailable()) {
+        const consent = await getConsent();
+        set({ consentState: consent });
+      }
+    } catch { /* ignore */ }
+  },
+
+  connectBackend: () => {
+    connect();
+    onSnapshot((status) => {
+      set({ backendOnline: true, backendStatus: status as unknown as BackendStatus });
+    });
+    // If the socket drops (backend died/restarted), stop claiming it is
+    // online until a fresh snapshot arrives on reconnect.
+    onDisconnect(() => {
+      set({ backendOnline: false });
+    });
+    
+    // Task events. The backend broadcasts positional args: 1-arg events arrive
+    // as a bare task-id string, 2-arg events as [taskId, detail].
+    const taskIdOf = (payload: unknown): string | undefined => {
+      if (typeof payload === 'string') return payload || undefined;
+      if (Array.isArray(payload)) return payload[0] ? String(payload[0]) : undefined;
+      if (payload && typeof payload === 'object') {
+        const taskId = (payload as { taskId?: unknown }).taskId;
+        return taskId ? String(taskId) : undefined;
+      }
+      return undefined;
+    };
+    const taskExtra = (payload: unknown): unknown =>
+      Array.isArray(payload) ? payload[1] : undefined;
+    // task:completed result is { summary, output, steps }; surface the summary.
+    const taskResultText = (payload: unknown): string | null => {
+      const extra = taskExtra(payload);
+      if (typeof extra === 'string') return extra || null;
+      if (extra && typeof extra === 'object') {
+        const r = extra as { summary?: unknown; output?: unknown };
+        const s = r.summary ?? r.output;
+        return typeof s === 'string' ? s : null;
+      }
+      return null;
+    };
+    const taskErrorText = (payload: unknown): string | null => {
+      const extra = taskExtra(payload);
+      return typeof extra === 'string' ? extra || null : null;
+    };
+
+    onEvent('task:created', (payload) => {
+      const taskId = taskIdOf(payload);
+      if (!taskId) return;
+      set((s) => {
+        const exists = s.activeTasks.some((t) => t.id === taskId);
+        if (exists) return s;
+        return { activeTasks: [...s.activeTasks, { id: taskId, description: '', priority: 0, status: 'pending' as const, steps: [], result: null, error: null, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }] };
+      });
+    });
+    onEvent('task:started', (payload) => {
+      const taskId = taskIdOf(payload);
+      set((s) => ({
+        activeTasks: s.activeTasks.map((t) => t.id === taskId ? { ...t, status: 'executing' as const } : t),
+      }));
+    });
+    onEvent('task:completed', (payload) => {
+      const taskId = taskIdOf(payload);
+      const result = taskResultText(payload);
+      set((s) => ({
+        activeTasks: s.activeTasks.map((t) => t.id === taskId ? { ...t, status: 'completed' as const, result } : t),
+      }));
+    });
+    onEvent('task:failed', (payload) => {
+      const taskId = taskIdOf(payload);
+      const error = taskErrorText(payload);
+      set((s) => ({
+        activeTasks: s.activeTasks.map((t) => t.id === taskId ? { ...t, status: 'failed' as const, error: error ?? 'failed' } : t),
+      }));
+    });
+    onEvent('task:cancelled', (payload) => {
+      const taskId = taskIdOf(payload);
+      set((s) => ({
+        activeTasks: s.activeTasks.map((t) => t.id === taskId ? { ...t, status: 'cancelled' as const } : t),
+      }));
+    });
+    
+    // Knowledge & memory events
+    onEvent('knowledge:updated', () => {
+      // Could trigger a refresh of brain data
+    });
+    
+    // Screen events
+    onEvent('screen:update', (payload) => {
+      set({ screenState: payload as Record<string, unknown> });
+    });
+    
+    // Meeting events
+    onEvent('meeting:transcript', (_payload) => {
+      // Store meeting transcript updates
+    });
+    onEvent('meeting:order', (_payload) => {
+      // Handle spoken meeting orders
+    });
+    
+    // Config changes
+    onEvent('config:changed', () => {
+      // Refresh backend status
+    });
+    
+    // Vault events
+    onEvent('vault:entry', () => {
+      // Could trigger audit log refresh
+    });
+    
+    // Chrome telemetry
+    onEvent('chrome:telemetry', () => {
+      // Could refresh chrome data
+    });
+    
+    // Catch-all for logging
+    onAnyEvent((name, payload) => {
+      console.log(`[ws] ${name}`, payload);
+    });
+  },
+
+  disconnectBackend: () => {
+    disconnect();
+    set({ backendOnline: false, backendStatus: null });
+  },
+
+  refreshBackendStatus: async () => {
+    const online = await isBackendAvailable();
+    set({ backendOnline: online });
+    if (online) {
+      try {
+        const status = await getStatus();
+        set({ backendStatus: status });
+      } catch { /* ignore */ }
+    }
+  },
 
   initializeAuth: async () => {
+    if (import.meta.env.DEV) {
+      try {
+        const devUser = localStorage.getItem('umbra-dev-user');
+        if (devUser) {
+          const u = JSON.parse(devUser);
+          set({ isAuthReady: true, isAuthenticated: true, user: u, emailVerified: true, isOnboarded: true });
+          return;
+        }
+      } catch { /* ignore */ }
+    }
     const sb = supabase;
     if (!sb) {
       set({ isAuthReady: true });
@@ -480,14 +674,43 @@ export const useAppStore = create<AppState>((set) => ({
       });
       authListenerStarted = true;
     }
+
+    // Try to sync with backend
+    if (session) {
+      try {
+        if (await isBackendAvailable()) {
+          // Check if we have a stored backend API key
+          const storedKey = localStorage.getItem('umbra-backend-apikey');
+          if (storedKey) {
+            set({ backendApiKey: storedKey });
+          }
+        }
+      } catch { /* ignore */ }
+    }
   },
 
   login: async (email: string, password: string) => {
     const res = await signIn(email, password);
-    if (res.ok && supabase) {
-      const { data } = await supabase.auth.getSession();
-      const v = sessionToAuthView(data?.session);
-      set({ isAuthenticated: true, user: v.user, emailVerified: v.emailVerified, isOnboarded: v.isOnboarded });
+    if (res.ok) {
+      if (import.meta.env.DEV && email.trim().toLowerCase() === 'davide@gmail.com' && password === 'davide12') {
+        const u = { email: 'davide@gmail.com', name: 'Davide' };
+        localStorage.setItem('umbra-dev-user', JSON.stringify(u));
+        set({ isAuthenticated: true, user: u, emailVerified: true, isOnboarded: true });
+      } else if (supabase) {
+        const { data } = await supabase.auth.getSession();
+        const v = sessionToAuthView(data?.session);
+        set({ isAuthenticated: true, user: v.user, emailVerified: v.emailVerified, isOnboarded: v.isOnboarded });
+
+        // Try to sync with backend
+        try {
+          if (await isBackendAvailable()) {
+            const storedKey = localStorage.getItem('umbra-backend-apikey');
+            if (storedKey) {
+              set({ backendApiKey: storedKey });
+            }
+          }
+        } catch { /* ignore */ }
+      }
     }
     return res;
   },
@@ -547,6 +770,7 @@ export const useAppStore = create<AppState>((set) => ({
 
   logout: async () => {
     await signOut();
+    if (import.meta.env.DEV) localStorage.removeItem('umbra-dev-user');
     set({
       isAuthenticated: false,
       user: null,

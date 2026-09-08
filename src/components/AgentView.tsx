@@ -2,13 +2,17 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import gsap from 'gsap';
 import { useAppStore, type View } from '../stores/appStore';
 import { aiChat, DEFAULT_AI, providerById } from '../lib/ai';
+import { isBackendAvailable, chat as backendChat, submitTask, rememberMemory, cancelTask, retryTask, getActiveTasks, type Task } from '../lib/backend';
+import { waitForTaskOutcome } from '../lib/backendWs';
 import { transcribeAudio, LOCAL_STT_DEFAULT } from '../lib/stt';
 import { isVoiceStudioOnline, isVoiceboxOnline, speakWithVoiceStudio, speakWithVoicebox } from '../lib/voiceEngines';
 import ParticleSphere from './ParticleSphere';
 import { BrainView } from './BrainView';
 import {
   Mic, ArrowUp, Volume2, Square, ChevronLeft, ChevronRight, Trash2,
+  Loader2, XCircle, RotateCcw,
 } from 'lucide-react';
+import GlitterWrap from './GlitterWrap';
 
 const viewMap: { id: View; label: string; keys: string[] }[] = [
   { id: 'agent', label: 'the agent page', keys: ['agent'] },
@@ -137,7 +141,7 @@ export function AgentView() {
   const focusIdx = Math.max(0, crew.findIndex((a) => a && a.id === focusedAgentId));
   const focusedAgent = crew[focusIdx] ?? null;
   const accent = focusedAgent?.accent ?? avatar.accent;
-  const SPHERE_D = '40vmin';
+  const SPHERE_D = '20vmin';
   const RING_RADIUS = 44;
   const RING_DIP = 10;
   const RING_SPREAD = crew.length === 2 ? 90 : 360 / Math.max(1, crew.length);
@@ -159,6 +163,24 @@ export function AgentView() {
   const [isRecording, setIsRecording] = useState(false);
   const [, setProposal] = useState<{ name: string; task: string } | null>(null);
   const chatTokenRef = useRef(0);
+  const [activeTasks, setActiveTasks] = useState<Task[]>([]);
+  const [tasksOpen, setTasksOpen] = useState(false);
+  const [tasksLoading, setTasksLoading] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    const poll = async () => {
+      if (await isBackendAvailable()) {
+        try {
+          const res = await getActiveTasks();
+          if (active) setActiveTasks(res.tasks ?? []);
+        } catch { /* ignore */ }
+      }
+    };
+    poll();
+    const iv = window.setInterval(poll, 10000);
+    return () => { active = false; window.clearInterval(iv); };
+  }, []);
 
   useEffect(() => {
     if (!namedMain) {
@@ -502,6 +524,14 @@ export function AgentView() {
         })(),
         icon: 'sparkles',
       });
+      // Submit task to backend if available
+      (async () => {
+        if (await isBackendAvailable()) {
+          try {
+            await submitTask(`${name}: ${displayTask}`, 1);
+          } catch { /* backend task submission failed, agent still created locally */ }
+        }
+      })();
       try {
         addBrainFile(`agent_${name}.md`, `${name} — ${displayTask}\n\nSpawned by voice or text. Watching the timeline until done.`, 'text/markdown');
       } catch {
@@ -821,11 +851,31 @@ export function AgentView() {
         (p?.about ? `\nAbout the user: ${p.about}` : '') +
         facts +
         `\n\nRecent journal:\n${recent}`;
+
+      // Try backend first, fall back to direct cloud AI. The backend treats a
+      // chat as a task dispatch and answers asynchronously on the WebSocket
+      // (task:completed / task:failed events keyed by taskId).
+      let reply: string;
+      let usedBackend = false;
       try {
-        const reply = await aiChat(effConfig, system, text, (delta) => {
+        if (await isBackendAvailable()) {
+          const res = await backendChat(text, focusedAgent?.name);
+          const taskId = res.dispatch?.taskId;
+          if (!taskId) throw new Error('backend dispatch failed');
+          const outcome = await waitForTaskOutcome(taskId);
+          if (!outcome.ok) throw new Error(outcome.error || 'backend task failed');
+          reply = outcome.reply || 'Done.';
+          usedBackend = true;
+        } else {
+          throw new Error('backend offline');
+        }
+      } catch {
+        // Backend unavailable or the task failed — fall back to direct cloud AI
+        reply = await aiChat(effConfig, system, text, (delta) => {
           if (token !== chatTokenRef.current) return;
           void delta;
         });
+      }
         if (token !== chatTokenRef.current) return;
         let cleanReply = reply;
         if (!focusedAgent && agents.length < 6) {
@@ -854,14 +904,7 @@ export function AgentView() {
           // ignore
         }
         useAppStore.getState().recordUsage(selfName, Math.ceil((text.length + reply.length) / 4));
-        setStatus({ kind: 'idle', text: `answered via ${providerById(effConfig.provider).label}` });
-      } catch (e) {
-        if (token !== chatTokenRef.current) return;
-        const msg = (e as Error).message || 'engine error';
-        setStatus({ kind: 'error', text: msg });
-        addJournal('action', `Engine error: ${msg}`);
-        speak(`My engine had a problem: ${msg}. Check the connection in settings.`);
-      }
+        setStatus({ kind: 'idle', text: usedBackend ? 'answered via backend' : `answered via ${providerById(effConfig.provider).label}` });
     },
     [aiConfig, speak, addJournal, focusedAgent, agents, addBrainFile]
   );
@@ -900,6 +943,12 @@ export function AgentView() {
       const fact = memMatch[1].replace(/[.!?。！？]+$/u, '').trim();
       if (fact) {
         addFact(fact);
+        // Store fact in backend memory if available
+        (async () => {
+          if (await isBackendAvailable()) {
+            try { await rememberMemory(fact); } catch { /* ignore */ }
+          }
+        })();
         addJournal('action', `Remembered: ${fact}`);
         try {
           addBrainFile(`remembered_${Date.now()}.md`, fact, 'text/markdown');
@@ -1356,19 +1405,78 @@ export function AgentView() {
 
   const introMode = introStep !== 'done';
 
+  const handleCancelTask = useCallback(async (id: string) => {
+    try {
+      await cancelTask(id);
+      setActiveTasks((prev) => prev.map((t) => t.id === id ? { ...t, status: 'cancelled' as const } : t));
+      setStatus({ kind: 'idle', text: 'task cancelled' });
+    } catch {
+      setStatus({ kind: 'error', text: 'cancel failed' });
+    }
+  }, []);
+
+  const handleRetryTask = useCallback(async (task: Task) => {
+    try {
+      const res = await retryTask(task.id);
+      setStatus({ kind: 'busy', text: `retried — ${task.description.slice(0, 40)}` });
+      setActiveTasks((prev) => prev.map((t) => t.id === task.id ? { ...t, status: 'pending' as const } : t));
+      if (res.taskId) {
+        void res.taskId;
+      }
+    } catch {
+      setStatus({ kind: 'error', text: 'retry failed' });
+    }
+  }, []);
+
+  const refreshTasks = useCallback(async () => {
+    setTasksLoading(true);
+    try {
+      if (await isBackendAvailable()) {
+        const res = await getActiveTasks();
+        setActiveTasks(res.tasks ?? []);
+      }
+    } catch { /* ignore */ }
+    setTasksLoading(false);
+  }, []);
+
+  const taskStatusColor = (s: Task['status']) => {
+    switch (s) {
+      case 'completed': return '#34D399';
+      case 'failed': return '#F87171';
+      case 'cancelled': return '#9CA3AF';
+      case 'executing': return '#60A5FA';
+      case 'planning': return '#FBBF24';
+      case 'healing': return '#C084FC';
+      default: return '#94A3B8';
+    }
+  };
+
   return (
     <div
       className="relative h-full w-full overflow-hidden"
-      style={{ background: 'transparent', touchAction: 'pan-y', userSelect: dragging ? 'none' : undefined }}
+      style={{ background: '#000', touchAction: 'pan-y', userSelect: dragging ? 'none' : undefined }}
       onPointerDown={onWorkspacePointerDown}
       onPointerMove={onWorkspacePointerMove}
       onPointerUp={onWorkspacePointerUp}
       onPointerCancel={onWorkspacePointerUp}
     >
-      <div
-        className="absolute inset-0 pointer-events-none"
-        style={{ backgroundImage: 'radial-gradient(rgba(255,255,255,0.03) 1px, transparent 1px)', backgroundSize: '38px 38px' }}
-      />
+      <div className="absolute inset-0 z-0 pointer-events-none">
+        <GlitterWrap
+          particleCount={420}
+          color1="#ffffff"
+          color2="#60A5FA"
+          color3="#3B82F6"
+          speed={4}
+          density={55}
+          starSize={9}
+          focalDepth={14}
+          turbulence={0}
+          brightness={65}
+          glitterIntensity={4}
+          trailAmount={96}
+          reverse={false}
+        />
+      </div>
 
       <div
         className="absolute inset-0"
@@ -1382,7 +1490,7 @@ export function AgentView() {
       >
         <div ref={sphereRef} className="absolute inset-0" style={{ transformOrigin: 'center' }}>
           <div ref={pulseRef} className="absolute inset-0" style={{ transformOrigin: 'center' }}>
-            <div className="absolute" style={{ left: 'calc(50% - 20vmin)', top: '40%' }}>
+            <div className="absolute" style={{ left: 'calc(50% - 10vmin)', top: '50%' }}>
               {crew.map((agent, i) => {
                 const o = i - focusIdx;
                 const isMain = !agent;
@@ -1427,26 +1535,27 @@ export function AgentView() {
                           />
                         )}
                         <ParticleSphere
-                          particlesCount={isMain ? 12000 : 10000}
-                          particleScale={isMain ? 7 : 5}
-                          speed={isMain ? 18 : 14}
-                          smoothing={4}
-                          scale={isMain ? 5 : 4}
-                          drag
-                          dragSpeed={3}
-                          stopOnHover
-                          cursorOn={isFocus}
-                          cursorRadiusUI={70}
-                          cursorStrengthUI={10}
-                          clickForce={4}
+                          particlesCount={12000}
+                          particleScale={6}
+                          speed={25}
+                          smoothing={7}
+                          scale={10}
+                          drag={true}
+                          dragSpeed={5}
+                          cursorOn={true}
+                          cursorRadiusUI={80}
+                          cursorStrengthUI={12}
+                          clickForce={6}
+                          stopOnHover={false}
                           sphereColor={acc}
+                          style={{ width: '100%', height: '100%' }}
                         />
                       </div>
                     </div>
                     <div
                       className="absolute left-0 right-0 flex flex-col items-center"
                       style={{
-                        top: '88%',
+                        top: '108%',
                         marginTop: 0,
                         pointerEvents: isFocus ? 'none' : 'auto',
                         cursor: 'pointer',
@@ -1717,6 +1826,128 @@ export function AgentView() {
           )}
         </div>
       </div>
+      )}
+
+      {!space && !introMode && activeTasks.length > 0 && (
+        <div
+          className="absolute left-6 right-6 pointer-events-auto"
+          style={{
+            bottom: 170,
+            maxWidth: 620,
+            margin: '0 auto',
+            zIndex: 25,
+          }}
+        >
+          <button
+            onClick={() => { setTasksOpen((o) => !o); if (!tasksOpen) refreshTasks(); }}
+            className="w-full flex items-center justify-between px-4 py-2.5 rounded-xl transition-colors"
+            style={{
+              background: 'rgba(18,20,26,0.85)',
+              border: '1px solid var(--hairline-strong)',
+              backdropFilter: 'blur(16px)',
+              color: 'var(--text-dim)',
+              fontFamily: 'var(--font)',
+              fontSize: 12,
+            }}
+            onMouseEnter={(e) => (e.currentTarget.style.borderColor = accent + '55')}
+            onMouseLeave={(e) => (e.currentTarget.style.borderColor = 'var(--hairline-strong)')}
+          >
+            <span className="flex items-center gap-2 uppercase tracking-widest font-medium">
+              <span className="w-1.5 h-1.5 rounded-full" style={{ background: accent, animation: 'pulse-dot 1.2s infinite' }} />
+              Active Tasks ({activeTasks.filter((t) => t.status === 'executing' || t.status === 'planning' || t.status === 'pending').length})
+            </span>
+            <span style={{ transform: tasksOpen ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform 0.2s', fontSize: 10 }}>▼</span>
+          </button>
+          {tasksOpen && (
+            <div
+              className="mt-1.5 rounded-xl overflow-hidden"
+              style={{
+                background: 'rgba(18,20,26,0.92)',
+                border: '1px solid var(--hairline-strong)',
+                backdropFilter: 'blur(16px)',
+                maxHeight: 240,
+                overflowY: 'auto',
+              }}
+            >
+              {tasksLoading && (
+                <div className="flex items-center justify-center py-4">
+                  <Loader2 size={16} className="animate-spin" style={{ color: 'var(--text-faint)' }} />
+                </div>
+              )}
+              {!tasksLoading && activeTasks.map((task) => (
+                <div
+                  key={task.id}
+                  className="flex items-center gap-3 px-4 py-3"
+                  style={{ borderBottom: '1px solid var(--hairline)' }}
+                >
+                  <span
+                    className="w-1.5 h-1.5 rounded-full flex-shrink-0"
+                    style={{ background: taskStatusColor(task.status) }}
+                  />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs font-medium truncate" style={{ color: 'var(--text-primary)', fontFamily: 'var(--font)' }}>
+                      {task.description}
+                    </p>
+                    <div className="flex items-center gap-2 mt-0.5">
+                      <span
+                        className="text-[10px] font-medium uppercase px-1.5 py-0.5 rounded"
+                        style={{
+                          color: taskStatusColor(task.status),
+                          background: taskStatusColor(task.status) + '18',
+                        }}
+                      >
+                        {task.status}
+                      </span>
+                      <span className="text-[10px]" style={{ color: 'var(--text-faint)' }}>
+                        {new Date(task.createdAt).toLocaleTimeString()}
+                      </span>
+                    </div>
+                  </div>
+                  {(task.status === 'failed' || task.status === 'cancelled') && (
+                    <div className="flex items-center gap-1 flex-shrink-0">
+                      <button
+                        onClick={() => handleRetryTask(task)}
+                        className="flex items-center justify-center rounded-lg transition-colors"
+                        style={{
+                          width: 28, height: 28,
+                          background: 'rgba(96,165,250,0.12)',
+                          border: '1px solid rgba(96,165,250,0.3)',
+                          color: '#60A5FA',
+                        }}
+                        title="Retry task"
+                        onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(96,165,250,0.24)')}
+                        onMouseLeave={(e) => (e.currentTarget.style.background = 'rgba(96,165,250,0.12)')}
+                      >
+                        <RotateCcw size={12} />
+                      </button>
+                      <button
+                        onClick={() => handleCancelTask(task.id)}
+                        className="flex items-center justify-center rounded-lg transition-colors"
+                        style={{
+                          width: 28, height: 28,
+                          background: 'rgba(248,113,113,0.12)',
+                          border: '1px solid rgba(248,113,113,0.3)',
+                          color: '#F87171',
+                        }}
+                        title="Cancel task"
+                        onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(248,113,113,0.24)')}
+                        onMouseLeave={(e) => (e.currentTarget.style.background = 'rgba(248,113,113,0.12)')}
+                      >
+                        <XCircle size={12} />
+                      </button>
+                    </div>
+                  )}
+                  {task.status === 'executing' && (
+                    <Loader2 size={14} className="animate-spin flex-shrink-0" style={{ color: '#60A5FA' }} />
+                  )}
+                </div>
+              ))}
+              {!tasksLoading && activeTasks.length === 0 && (
+                <p className="text-center text-xs py-4" style={{ color: 'var(--text-faint)' }}>No active tasks</p>
+              )}
+            </div>
+          )}
+        </div>
       )}
 
       {namePrompt && (

@@ -1,23 +1,24 @@
 import { useRef, useEffect } from 'react';
 import gsap from 'gsap';
 import { useAppStore, type View } from '../stores/appStore';
-import { Brain, Settings, LogOut, Bot, Smartphone, Wrench, Lock, Plug, BarChart3, Phone, Video, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Brain, Settings, LogOut, Bot, Smartphone, Wrench, Lock, Plug, BarChart3, Phone, Video, ChevronLeft, ChevronRight, House } from 'lucide-react';
 
 const navItems: { id: View; label: string; icon: React.ReactNode }[] = [
   { id: 'agent', label: 'Agent', icon: <Bot size={16} /> },
   { id: 'connectors', label: 'Connectors', icon: <Plug size={16} /> },
-  { id: 'vault', label: 'Vault', icon: <Lock size={16} /> },
-  { id: 'devices', label: 'Devices', icon: <Smartphone size={16} /> },
-  { id: 'brain', label: 'Brain', icon: <Brain size={16} /> },
   { id: 'meetings', label: 'Meetings', icon: <Video size={16} /> },
-  { id: 'skills', label: 'Skills', icon: <Wrench size={16} /> },
+  { id: 'brain', label: 'Memory', icon: <Brain size={16} /> },
+  { id: 'devices', label: 'Devices', icon: <Smartphone size={16} /> },
+  { id: 'smarthome', label: 'Smart Home', icon: <House size={16} /> },
+  { id: 'vault', label: 'Vault', icon: <Lock size={16} /> },
   { id: 'usage', label: 'Usage', icon: <BarChart3 size={16} /> },
   { id: 'phone', label: 'Phone', icon: <Phone size={16} /> },
+  { id: 'skills', label: 'Skills', icon: <Wrench size={16} /> },
   { id: 'settings', label: 'Settings', icon: <Settings size={16} /> },
 ];
 
 export function Sidebar() {
-  const { currentView, setView, user, logout, avatar, isSidebarCollapsed, toggleSidebar } = useAppStore();
+  const { currentView, setView, user, logout, avatar, isSidebarCollapsed, toggleSidebar, backendOnline } = useAppStore();
   const navRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const collapsed = isSidebarCollapsed;
@@ -98,7 +99,7 @@ export function Sidebar() {
       >
         <div className="flex items-center gap-3 px-1.5 py-2" style={{ width: collapsed ? undefined : '100%' }}>
           <span
-            className="flex-shrink-0 rounded-full"
+            className="flex-shrink-0 rounded-full relative"
             style={{
               width: 34,
               height: 34,
@@ -106,7 +107,17 @@ export function Sidebar() {
               border: `1px solid ${avatar.accent}44`,
               boxShadow: `0 0 14px ${avatar.accent}33`,
             }}
-          />
+          >
+            <span
+              className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full border-2"
+              style={{
+                background: backendOnline ? '#22c55e' : '#64748b',
+                borderColor: 'rgba(6,7,9,0.8)',
+                boxShadow: backendOnline ? '0 0 6px rgba(34,197,94,0.5)' : 'none',
+              }}
+              title={backendOnline ? 'Backend connected' : 'Backend offline'}
+            />
+          </span>
           {!collapsed && (
             <>
               <div className="flex-1 min-w-0">

@@ -2,9 +2,10 @@ import { useRef, useEffect, useState, type JSX } from 'react';
 import gsap from 'gsap';
 import { useAppStore } from '../stores/appStore';
 import { AI_PROVIDERS, providerById, testAI, DEFAULT_AI, type AIConfig } from '../lib/ai';
+import { isBackendAvailable, getProviderConfig, configureProvider, testLlm, getModelStatus, getVoiceStatus, listAudioDevices, setAudioDefault, type VoiceStatus } from '../lib/backend';
 import { STT_PROVIDERS, sttProviderById, transcribeAudio, silentWavBlob, type STTConfig } from '../lib/stt';
 import { VoicePicker } from './VoicePicker';
-import { Eye, EyeOff, Mic, Smartphone, Settings as SettingsIcon, Cpu, CheckCircle2, XCircle, Loader2, Trash2, Volume2, ArrowRight, AudioLines } from 'lucide-react';
+import { Eye, EyeOff, Mic, Smartphone, Settings as SettingsIcon, Cpu, CheckCircle2, XCircle, Loader2, Trash2, Volume2, ArrowRight, AudioLines, Headphones } from 'lucide-react';
 
 const accentColors = ['#3B82F6', '#60A5FA', '#B600A8', '#7621B0', '#BE4C00', '#0E7C7B'];
 
@@ -59,7 +60,7 @@ const groupIcons: Record<string, JSX.Element> = {
 };
 
 export function SettingsView() {
-  const { user, avatar, avatarName, updateAvatar, agents, logout, aiConfig, setAIConfig, clearAIConfig, sttConfig, setSTTConfig, clearSTTConfig, talkAlways, setTalkAlways, addJournal, setView } = useAppStore();
+  const { user, avatar, avatarName, updateAvatar, agents, logout, aiConfig, setAIConfig, clearAIConfig, sttConfig, setSTTConfig, clearSTTConfig, talkAlways, setTalkAlways, addJournal, setView, backendOnline, backendStatus } = useAppStore();
   const headerRef = useRef<HTMLDivElement>(null);
   const groupsRef = useRef<HTMLDivElement>(null);
 
@@ -76,6 +77,13 @@ export function SettingsView() {
   const [sttShowKey, setSttShowKey] = useState(false);
   const [sttTestState, setSttTestState] = useState<'idle' | 'testing' | 'ok' | 'error'>('idle');
   const [sttTestMsg, setSttTestMsg] = useState('');
+
+  const [backendTestState, setBackendTestState] = useState<'idle' | 'testing' | 'ok' | 'error'>('idle');
+  const [backendTestMsg, setBackendTestMsg] = useState('');
+  const [voiceStatus, setVoiceStatus] = useState<VoiceStatus | null>(null);
+  const [modelStatus, setModelStatus] = useState<Record<string, unknown> | null>(null);
+  const [audioDevices, setAudioDevices] = useState<{ render: unknown[]; capture: unknown[] } | null>(null);
+  const [audioSettingDefault, setAudioSettingDefault] = useState(false);
 
   const prov = providerById(provider);
   const sttProvInfo = sttProviderById(sttProvider);
@@ -147,6 +155,11 @@ export function SettingsView() {
       addJournal('action', `AI engine connected — ${prov.label} / ${cfg.model}`);
       setTestState('ok');
       setTestMsg('Connected and saved. The agent now thinks with this engine.');
+      try {
+        if (await isBackendAvailable()) {
+          await configureProvider({ provider, apiKey: apiKey.trim(), models: { default: model.trim() } });
+        }
+      } catch { /* ignore backend sync errors */ }
     }
   };
 
@@ -162,6 +175,77 @@ export function SettingsView() {
     return () => ctx.revert();
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      if (!(await isBackendAvailable())) return;
+      try {
+        const vs = await getVoiceStatus();
+        if (!cancelled) setVoiceStatus(vs);
+      } catch { /* ignore */ }
+    })();
+    return () => { cancelled = true; };
+  }, [backendOnline]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      if (!(await isBackendAvailable())) return;
+      try {
+        await getProviderConfig();
+        if (cancelled) return;
+      } catch { /* ignore */ }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      if (!(await isBackendAvailable())) return;
+      try {
+        const status = await getModelStatus();
+        if (!cancelled) setModelStatus(status);
+      } catch { /* ignore */ }
+    })();
+    return () => { cancelled = true; };
+  }, [backendOnline]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      if (!(await isBackendAvailable())) return;
+      try {
+        const devices = await listAudioDevices();
+        if (!cancelled) setAudioDevices(devices as any);
+      } catch { /* ignore */ }
+    })();
+    return () => { cancelled = true; };
+  }, [backendOnline]);
+
+  const handleSetAudioDefault = async (flow: 'render' | 'capture', deviceId: string) => {
+    setAudioSettingDefault(true);
+    try {
+      await setAudioDefault(flow, deviceId);
+      const devices = await listAudioDevices();
+      setAudioDevices(devices as any);
+    } catch { /* ignore */ }
+    setAudioSettingDefault(false);
+  };
+
+  const testBackend = async () => {
+    setBackendTestState('testing');
+    setBackendTestMsg('');
+    try {
+      await testLlm();
+      setBackendTestState('ok');
+      setBackendTestMsg('Backend LLM responded successfully');
+    } catch (e) {
+      setBackendTestState('error');
+      setBackendTestMsg((e as Error).message || 'Backend test failed');
+    }
+  };
+
   return (
     <div className="flex flex-col h-full overflow-hidden">
       <div ref={headerRef} className="px-6 py-5 hairline-b" style={{ background: 'rgba(6,7,9,0.68)', backdropFilter: 'blur(18px)', WebkitBackdropFilter: 'blur(18px)' }}>
@@ -172,6 +256,66 @@ export function SettingsView() {
       </div>
 
       <div ref={groupsRef} className="flex-1 overflow-y-auto px-6 py-5" style={{ maxWidth: 1000, width: '100%', margin: '0 auto' }}>
+        {/* Backend Status */}
+        <div className="card p-5 settings-group mb-4" style={{ background: 'var(--surface-1)', border: `1px solid ${backendOnline ? 'rgba(129,199,132,0.35)' : 'var(--hairline-strong)'}` }}>
+          <div className="flex items-center gap-2.5 mb-1">
+            <span className="w-7 h-7 rounded-full flex items-center justify-center" style={{ background: 'var(--surface-2)', border: '1px solid var(--hairline)', color: backendOnline ? '#81C784' : '#ef4444' }}>
+              <Cpu size={15} />
+            </span>
+            <h2 className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>Umbra OS Backend</h2>
+            <span className="ml-auto text-xs px-2 py-0.5 rounded-full" style={{ background: backendOnline ? 'rgba(129,199,132,0.15)' : 'rgba(239,68,68,0.15)', color: backendOnline ? '#81C784' : '#ef4444' }}>
+              {backendOnline ? 'Connected' : 'Offline'}
+            </span>
+          </div>
+          <p className="text-xs mb-3" style={{ color: 'var(--text-dim)' }}>
+            {backendOnline
+              ? `Running at ${backendStatus?.uptimeMs ? `${Math.round(backendStatus.uptimeMs / 1000)}s uptime` : 'localhost:8787'} — tasks, voice, and knowledge are routed through the backend`
+              : 'Start the backend for tasks, voice, knowledge graph, and MCP connectors. Falling back to direct cloud AI.'}
+          </p>
+          {backendStatus && (
+            <div className="grid grid-cols-3 gap-3 mb-3">
+              <div className="text-center p-2 rounded-lg" style={{ background: 'var(--surface-2)' }}>
+                <div className="text-xs font-semibold" style={{ color: 'var(--text-primary)' }}>{backendStatus.models?.fast || '—'}</div>
+                <div className="text-[10px]" style={{ color: 'var(--text-dim)' }}>Fast model</div>
+              </div>
+              <div className="text-center p-2 rounded-lg" style={{ background: 'var(--surface-2)' }}>
+                <div className="text-xs font-semibold" style={{ color: 'var(--text-primary)' }}>{backendStatus.models?.vision || '—'}</div>
+                <div className="text-[10px]" style={{ color: 'var(--text-dim)' }}>Vision model</div>
+              </div>
+              <div className="text-center p-2 rounded-lg" style={{ background: 'var(--surface-2)' }}>
+                <div className="text-xs font-semibold" style={{ color: 'var(--text-primary)' }}>{backendStatus.agent?.activeTasks ?? 0}</div>
+                <div className="text-[10px]" style={{ color: 'var(--text-dim)' }}>Active tasks</div>
+              </div>
+            </div>
+          )}
+          {modelStatus && (
+            <div className="flex gap-3 mb-3 text-[10px]" style={{ color: 'var(--text-dim)' }}>
+              <span>Models loaded: {String((modelStatus as any).loaded ?? (modelStatus as any).total ?? '—')}</span>
+              {(modelStatus as any).provider && <span>Provider: {String((modelStatus as any).provider)}</span>}
+            </div>
+          )}
+          {voiceStatus && (
+            <div className="flex gap-3 mb-3 text-[10px]" style={{ color: 'var(--text-dim)' }}>
+              <span>STT: {voiceStatus.stt?.online ? '✓ online' : '✗ offline'}</span>
+              <span>TTS: {voiceStatus.tts?.online ? '✓ online' : '✗ offline'}</span>
+              <span>VoiceStudio: {voiceStatus.voiceStudio?.online ? '✓' : '✗'}</span>
+              <span>voicebox: {voiceStatus.voicebox?.online ? '✓' : '✗'}</span>
+            </div>
+          )}
+          <button
+            className="btn-ghost text-xs"
+            onClick={testBackend}
+            disabled={backendTestState === 'testing'}
+            style={{ height: 28 }}
+          >
+            {backendTestState === 'testing' ? <Loader2 size={12} className="animate-spin mr-1" /> : null}
+            Test backend LLM
+          </button>
+          {backendTestMsg && (
+            <p className="text-xs mt-2" style={{ color: backendTestState === 'ok' ? '#81C784' : '#ef4444' }}>{backendTestMsg}</p>
+          )}
+        </div>
+
         <div className="card p-5 settings-group" style={{ background: 'var(--surface-1)', border: `1px solid ${aiConfig ? 'rgba(129,199,132,0.35)' : 'var(--hairline-strong)'}` }}>
           <div className="flex items-center gap-2.5 mb-1">
             <span className="w-7 h-7 rounded-full flex items-center justify-center" style={{ background: 'var(--surface-2)', border: '1px solid var(--hairline)', color: aiConfig ? '#81C784' : avatar.accent }}>
@@ -342,7 +486,7 @@ export function SettingsView() {
               <div className="min-w-0">
                 <h2 className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>Talk mode — always listen</h2>
                 <p className="text-xs font-light" style={{ color: 'var(--text-dim)' }}>
-                  Umbra listens for “{avatarName}, …” in the background and wakes hands-free. Off turns the mic off until you tap wake on the agent page.
+                  Umbra listens for "{avatarName}, …" in the background and wakes hands-free. Off turns the mic off until you tap wake on the agent page.
                 </p>
               </div>
             </div>
@@ -490,6 +634,77 @@ export function SettingsView() {
             </p>
           )}
         </div>
+
+        {/* Audio Devices */}
+        {backendOnline && audioDevices && (
+          <div className="card p-5 mt-4 settings-group" style={{ background: 'var(--surface-1)' }}>
+            <div className="flex items-center gap-2.5 mb-1">
+              <span className="w-7 h-7 rounded-full flex items-center justify-center" style={{ background: 'var(--surface-2)', border: '1px solid var(--hairline)', color: avatar.accent }}>
+                <Headphones size={15} />
+              </span>
+              <h2 className="text-sm font-semibold" style={{ color: 'var(--text-primary)' }}>Audio Devices</h2>
+            </div>
+            <p className="text-xs font-light mb-4" style={{ color: 'var(--text-dim)' }}>
+              Manage audio output and input devices used by the backend for voice playback and capture.
+            </p>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <h3 className="text-[11px] uppercase tracking-widest mb-2" style={{ color: 'var(--text-faint)', fontFamily: 'var(--font)' }}>Output (render)</h3>
+                <div className="space-y-1">
+                  {audioDevices.render && audioDevices.render.length > 0 ? audioDevices.render.map((d: any) => (
+                    <div key={d.id} className="flex items-center justify-between py-2 px-3 rounded-md" style={{ background: 'var(--surface-2)', border: '1px solid var(--hairline)' }}>
+                      <div className="flex items-center gap-2 min-w-0">
+                        <Headphones size={13} style={{ color: 'var(--text-dim)', flexShrink: 0 }} />
+                        <span className="text-xs truncate" style={{ color: 'var(--text-primary)' }}>{d.name || d.label || d.id}</span>
+                        {d.isDefault && <span className="text-[9px] px-1.5 py-0.5 rounded-full" style={{ background: 'rgba(129,199,132,0.15)', color: '#81C784' }}>default</span>}
+                      </div>
+                      {!d.isDefault && (
+                        <button
+                          onClick={() => handleSetAudioDefault('render', d.id)}
+                          disabled={audioSettingDefault}
+                          className="btn-ghost text-[10px]"
+                          style={{ height: 22, padding: '0 8px' }}
+                        >
+                          Set default
+                        </button>
+                      )}
+                    </div>
+                  )) : (
+                    <p className="text-xs py-2" style={{ color: 'var(--text-faint)' }}>No render devices found</p>
+                  )}
+                </div>
+              </div>
+
+              <div>
+                <h3 className="text-[11px] uppercase tracking-widest mb-2" style={{ color: 'var(--text-faint)', fontFamily: 'var(--font)' }}>Input (capture)</h3>
+                <div className="space-y-1">
+                  {audioDevices.capture && audioDevices.capture.length > 0 ? audioDevices.capture.map((d: any) => (
+                    <div key={d.id} className="flex items-center justify-between py-2 px-3 rounded-md" style={{ background: 'var(--surface-2)', border: '1px solid var(--hairline)' }}>
+                      <div className="flex items-center gap-2 min-w-0">
+                        <Mic size={13} style={{ color: 'var(--text-dim)', flexShrink: 0 }} />
+                        <span className="text-xs truncate" style={{ color: 'var(--text-primary)' }}>{d.name || d.label || d.id}</span>
+                        {d.isDefault && <span className="text-[9px] px-1.5 py-0.5 rounded-full" style={{ background: 'rgba(129,199,132,0.15)', color: '#81C784' }}>default</span>}
+                      </div>
+                      {!d.isDefault && (
+                        <button
+                          onClick={() => handleSetAudioDefault('capture', d.id)}
+                          disabled={audioSettingDefault}
+                          className="btn-ghost text-[10px]"
+                          style={{ height: 22, padding: '0 8px' }}
+                        >
+                          Set default
+                        </button>
+                      )}
+                    </div>
+                  )) : (
+                    <p className="text-xs py-2" style={{ color: 'var(--text-faint)' }}>No capture devices found</p>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
 
         <div className="card p-5 mt-4 settings-group" style={{ background: 'var(--surface-1)' }}>
           <div className="flex items-center gap-2.5 mb-2">

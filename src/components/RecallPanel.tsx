@@ -3,6 +3,8 @@ import gsap from 'gsap';
 import { useAppStore } from '../stores/appStore';
 import { answerFor, suggestions } from './RecallView';
 import { aiChat } from '../lib/ai';
+import { chat as backendChat, isBackendAvailable } from '../lib/backend';
+import { waitForTaskOutcome } from '../lib/backendWs';
 import { brainNotes, attachmentNotes } from '../lib/brain';
 import { Send, Bot, FileText, Bookmark, X, Maximize2, Minimize2 } from 'lucide-react';
 interface Source {
@@ -98,21 +100,42 @@ export function RecallPanel({
     } catch {
       // ignore
     }
-    const fallback = () => {
-      const answer = answerFor(text, agents, avatarName, journal, brainFiles);
-      setMessages((m) => [...m, { id: idRef.current++, role: 'assistant', ...answer }]);
-      setThinking(false);
+    const fallbackToDirectAI = () => {
+      if (aiConfig) {
+        aiChat(aiConfig, buildRecallSystem(avatarName, agents, journal, brainFiles), text)
+          .then((reply) => {
+            setMessages((m) => [...m, { id: idRef.current++, role: 'assistant', text: reply }]);
+            setThinking(false);
+          })
+          .catch(() => {
+            const answer = answerFor(text, agents, avatarName, journal, brainFiles);
+            setMessages((m) => [...m, { id: idRef.current++, role: 'assistant', ...answer }]);
+            setThinking(false);
+          });
+      } else {
+        const answer = answerFor(text, agents, avatarName, journal, brainFiles);
+        setMessages((m) => [...m, { id: idRef.current++, role: 'assistant', ...answer }]);
+        setThinking(false);
+      }
     };
-    if (aiConfig) {
-      aiChat(aiConfig, buildRecallSystem(avatarName, agents, journal, brainFiles), text)
-        .then((reply) => {
-          setMessages((m) => [...m, { id: idRef.current++, role: 'assistant', text: reply }]);
-          setThinking(false);
-        })
-        .catch(() => fallback());
-    } else {
-      window.setTimeout(fallback, 700 + Math.random() * 500);
-    }
+
+    (async () => {
+      if (!(await isBackendAvailable())) {
+        fallbackToDirectAI();
+        return;
+      }
+      try {
+        const res = await backendChat(text, 'recall');
+        const taskId = res.dispatch?.taskId;
+        if (!taskId) throw new Error('no task id');
+        const outcome = await waitForTaskOutcome(taskId);
+        if (!outcome.ok) throw new Error(outcome.error || 'backend task failed');
+        setMessages((m) => [...m, { id: idRef.current++, role: 'assistant', text: outcome.reply || 'Done.' }]);
+        setThinking(false);
+      } catch {
+        fallbackToDirectAI();
+      }
+    })();
   };
 
   return (

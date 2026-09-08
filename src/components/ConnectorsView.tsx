@@ -1,247 +1,426 @@
-import { useRef, useEffect, useState, type JSX } from 'react';
+import { useRef, useEffect, useState, useCallback, type JSX } from 'react';
 import gsap from 'gsap';
 import { useAppStore } from '../stores/appStore';
-import { Search, Settings2, Plug, ExternalLink, Zap, Cloud, Globe, BarChart3, MessageSquare, CreditCard, Database, Music, Video, Clock, Code2, Video as VideoIcon, Phone, Headphones } from 'lucide-react';
-
-interface Integration {
-  id: string;
-  name: string;
-  category: string;
-  description: string;
-  status: 'connected' | 'disconnected';
-}
+import {
+  isBackendAvailable, getMcpConnectors, getMcpCatalog,
+  connectMcp, disconnectMcp, mcpOauthStart, mcpSyncRegistry,
+  type McpCatalogEntry,
+} from '../lib/backend';
+import {
+  Search, Plug, Cloud, Database, MessageSquare, CreditCard, Code2, Globe,
+  X, Loader2, Check, Key, Shield, Unlock, RefreshCw, WifiOff,
+} from 'lucide-react';
 
 const CATEGORY_ICONS: Record<string, JSX.Element> = {
-  Cloud: <Cloud size={13} />,
-  Data: <Database size={13} />,
-  Sales: <MessageSquare size={13} />,
-  Media: <Video size={13} />,
-  Finance: <CreditCard size={13} />,
-  Dev: <Code2 size={13} />,
+  'AI & ML': <Cloud size={13} />, 'Cloud & DevOps': <Cloud size={13} />,
+  'Data & Analytics': <Database size={13} />, 'Communication': <MessageSquare size={13} />,
+  'Productivity': <Globe size={13} />, 'Developer': <Code2 size={13} />,
+  'Payments & Finance': <CreditCard size={13} />,
 };
 
-const CATEGORIES = ['All', 'Cloud', 'Data', 'Sales', 'Media', 'Finance', 'Dev'];
-
-const ICONS: Record<string, JSX.Element> = {
-  'Google Drive': <Cloud size={16} />, 'Dropbox': <Cloud size={16} />, 'OneDrive': <Cloud size={16} />,
-  'Google Calendar': <Clock size={16} />, 'Notion': <Globe size={16} />,
-  'Supabase': <Database size={16} />, 'PostgreSQL': <Database size={16} />, 'BigQuery': <BarChart3 size={16} />,
-  'Neon': <Database size={16} />, 'TencentDB': <Database size={16} />,
-  'HubSpot': <MessageSquare size={16} />, 'Salesforce': <MessageSquare size={16} />, 'Attio': <MessageSquare size={16} />,
-  'Slack': <MessageSquare size={16} />, 'Intercom': <MessageSquare size={16} />,
-  'YouTube Studio': <Video size={16} />, 'Twitch': <Video size={16} />, 'Spotify': <Music size={16} />,
-  'Adobe Premiere': <Video size={16} />, 'Descript': <Video size={16} />,
-  'Stripe': <CreditCard size={16} />, 'PayPal': <CreditCard size={16} />, 'QuickBooks': <BarChart3 size={16} />,
-  'Xero': <BarChart3 size={16} />, 'Revolut': <CreditCard size={16} />,
-  'GitHub': <Code2 size={16} />, 'GitLab': <Code2 size={16} />, 'Linear': <Plug size={16} />,
-  'Figma': <Plug size={16} />, 'Vercel': <Zap size={16} />,
-};
-
-const SEED: Integration[] = [
-  { id: 'drive', name: 'Google Drive', category: 'Cloud', description: 'File ops — read, write, sync with Workspace', status: 'connected' },
-  { id: 'supabase', name: 'Supabase', category: 'Data', description: 'Postgres + auth + realtime over direct DB pool', status: 'connected' },
-  { id: 'slack', name: 'Slack', category: 'Sales', description: 'Message, thread, canvas and workflow publishing', status: 'connected' },
-  { id: 'stripe', name: 'Stripe', category: 'Finance', description: 'Payments, subscriptions, refunds and payouts', status: 'connected' },
-  { id: 'github', name: 'GitHub', category: 'Dev', description: 'Repos, PRs, issues and Actions orchestration', status: 'connected' },
-  { id: 'notion', name: 'Notion', category: 'Cloud', description: 'Pages, databases and workspace search', status: 'connected' },
-  { id: 'bigquery', name: 'BigQuery', category: 'Data', description: 'Serverless analytics at petabyte scale', status: 'connected' },
-  { id: 'hubspot', name: 'HubSpot', category: 'Sales', description: 'CRM objects, deals and sequences', status: 'connected' },
-  { id: 'figma', name: 'Figma', category: 'Dev', description: 'Design tokens and component inspection', status: 'connected' },
-  { id: 'youtube', name: 'YouTube Studio', category: 'Media', description: 'Upload, schedule and community posts', status: 'connected' },
-  { id: 'spotify', name: 'Spotify', category: 'Media', description: 'Playlists, release scheduling, analytics', status: 'connected' },
-  { id: 'vercel', name: 'Vercel', category: 'Dev', description: 'Deployments, previews and env variables', status: 'connected' },
-  { id: 'intercom', name: 'Intercom', category: 'Sales', description: 'Inbox, auto-resolve and support flows', status: 'connected' },
-  { id: 'quickbooks', name: 'QuickBooks', category: 'Finance', description: 'Bookkeeping, invoices and tax reports', status: 'connected' },
-  { id: 'drive-backup', name: 'OneDrive', category: 'Cloud', description: 'Personal cloud file sync', status: 'disconnected' },
-  { id: 'postgres', name: 'PostgreSQL', category: 'Data', description: 'Direct connection — own host or VPS', status: 'disconnected' },
-  { id: 'salesforce', name: 'Salesforce', category: 'Sales', description: 'Enterprise CRM and marketing cloud', status: 'disconnected' },
-  { id: 'twitch', name: 'Twitch', category: 'Media', description: 'Go live, clips and chat moderation', status: 'disconnected' },
-  { id: 'paypal', name: 'PayPal', category: 'Finance', description: 'Payments and marketplace payouts', status: 'disconnected' },
-  { id: 'linear', name: 'Linear', category: 'Dev', description: 'Issues, cycles and roadmap automation', status: 'disconnected' },
-  { id: 'dropbox', name: 'Dropbox', category: 'Cloud', description: 'File storage and paper docs', status: 'disconnected' },
-  { id: 'neon', name: 'Neon', category: 'Data', description: 'Serverless Postgres with branching', status: 'disconnected' },
-  { id: 'attio', name: 'Attio', category: 'Sales', description: 'Modern relationship CRM', status: 'disconnected' },
-  { id: 'descript', name: 'Descript', category: 'Media', description: 'Audio/video editing by transcript', status: 'disconnected' },
-  { id: 'xero', name: 'Xero', category: 'Finance', description: 'Small business accounting', status: 'disconnected' },
-  { id: 'gitlab', name: 'GitLab', category: 'Dev', description: 'DevOps with built-in CI/CD', status: 'disconnected' },
-  { id: 'calendar', name: 'Google Calendar', category: 'Cloud', description: 'Events, availability and reminders', status: 'disconnected' },
-  { id: 'premiere', name: 'Adobe Premiere', category: 'Media', description: 'Programmatic video editing via .prproj', status: 'disconnected' },
-  { id: 'revolut', name: 'Revolut', category: 'Finance', description: 'Business cards, FX and multi-currency', status: 'disconnected' },
-  { id: 'tencentdb', name: 'TencentDB', category: 'Data', description: 'China-region relational database', status: 'disconnected' },
-];
-
-const CONNECTOR_GROUP: { id: string; name: string; desc: string; icon: React.ReactNode; accent: string; connected: boolean }[] = [
-  { id: 'meet', name: 'Google Meet', desc: 'Join calls, take minutes, store them in the brain', icon: <VideoIcon size={15} />, accent: '#22C55E', connected: true },
-  { id: 'zoom', name: 'Zoom', desc: 'Attend meetings and auto-summarize', icon: <VideoIcon size={15} />, accent: '#3B82F6', connected: true },
-  { id: 'teams', name: 'Microsoft Teams', desc: 'Channels, calls and transcript capture', icon: <VideoIcon size={15} />, accent: '#8B5CF6', connected: false },
-  { id: 'phone', name: 'Phone calls', desc: 'Take calls and keep the minutes in the vault', icon: <Phone size={15} />, accent: '#F59E0B', connected: true },
-  { id: 'voice', name: 'Umbra voice', desc: 'Always-listening wake word and tap-to-talk', icon: <Headphones size={15} />, accent: '#60A5FA', connected: true },
-];
+const PAGE_SIZE = 80;
 
 export function ConnectorsView() {
-  const { avatar, setView } = useAppStore();
+  const { avatar } = useAppStore();
   const headerRef = useRef<HTMLDivElement>(null);
-  const gridRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+
   const [query, setQuery] = useState('');
   const [category, setCategory] = useState('All');
-  const [integrations, setIntegrations] = useState<Integration[]>(SEED);
+  const [view, setView] = useState<'connected' | 'catalog'>('catalog');
+
+  const [connected, setConnected] = useState<ConnectedItem[]>([]);
+  const [catalog, setCatalog] = useState<McpCatalogEntry[]>([]);
+  const [catalogTotal, setCatalogTotal] = useState(0);
+  const [categories, setCategories] = useState<string[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
+  const [error, setError] = useState('');
+  const offsetRef = useRef(0);
+
+  const [connectingId, setConnectingId] = useState<string | null>(null);
+  const [connectModal, setConnectModal] = useState<{ entry: McpCatalogEntry; credential: string; baseUrl: string } | null>(null);
+  const [syncing, setSyncing] = useState(false);
+
+  interface ConnectedItem { id: string; name: string; category: string; connected: boolean; tools?: number; }
 
   useEffect(() => {
     const ctx = gsap.context(() => {
-      const tl = gsap.timeline({ defaults: { ease: 'power2.out', duration: 0.4 } });
-      tl.fromTo(headerRef.current, { opacity: 0, y: 12 }, { opacity: 1, y: 0 });
-      if (gridRef.current) {
-        tl.fromTo(gridRef.current.querySelectorAll('.integration-card'), { opacity: 0, y: 14 }, { opacity: 1, y: 0, stagger: 0.03 }, '-=0.15');
-      }
-    }, [headerRef, gridRef]);
+      gsap.fromTo(headerRef.current, { opacity: 0, y: 12 }, { opacity: 1, y: 0, duration: 0.4, ease: 'power2.out' });
+    }, [headerRef]);
     return () => ctx.revert();
   }, []);
 
-  const connectedCount = integrations.filter((i) => i.status === 'connected').length;
-  const filtered = integrations.filter((i) => {
-    const matchesCategory = category === 'All' || i.category === category;
-    const matchesQuery = `${i.name} ${i.description}`.toLowerCase().includes(query.toLowerCase());
-    return matchesCategory && matchesQuery;
-  });
+  // Fetch connected connectors on mount
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      if (!(await isBackendAvailable())) return;
+      try {
+        const data = await getMcpConnectors();
+        if (cancelled) return;
+        const conns = data.connectors as unknown as { entries: Array<{ id: string; name: string; kind: string; connected: boolean; tools: number }> };
+        if (conns?.entries?.length) {
+          setConnected(conns.entries.map((c) => ({
+            id: c.id, name: c.name, category: c.kind || 'Other',
+            connected: c.connected, tools: c.tools,
+          })));
+        }
+      } catch { /* keep empty */ }
+    })();
+    return () => { cancelled = true; };
+  }, []);
 
-  const toggle = (id: string) => {
-    setIntegrations((cur) => cur.map((i) => (i.id === id ? { ...i, status: i.status === 'connected' ? 'disconnected' : 'connected' } : i)));
+  // Load a page of catalog entries
+  const loadCatalogPage = useCallback(async (reset: boolean) => {
+    if (reset) {
+      offsetRef.current = 0;
+      setCatalog([]);
+      setHasMore(true);
+      setLoading(true);
+      setError('');
+    } else {
+      setLoadingMore(true);
+    }
+    try {
+      if (!(await isBackendAvailable())) { setError('Backend not available'); setLoading(false); setLoadingMore(false); return; }
+      const opts: { q?: string; category?: string; limit: number; offset: number } = {
+        limit: PAGE_SIZE, offset: offsetRef.current,
+      };
+      if (query.trim()) opts.q = query.trim();
+      if (category !== 'All') opts.category = category;
+      const result = await getMcpCatalog(opts);
+      const newEntries = result.entries ?? [];
+      setCatalogTotal(result.total);
+      if (result.categories?.length) setCategories(result.categories);
+      setCatalog((prev) => reset ? newEntries : [...prev, ...newEntries]);
+      offsetRef.current += newEntries.length;
+      setHasMore(newEntries.length >= PAGE_SIZE);
+    } catch (e) {
+      setError(`Failed to load: ${(e as Error).message}`);
+    }
+    setLoading(false);
+    setLoadingMore(false);
+  }, [query, category]);
+
+  // Load on mount and when switching to catalog
+  useEffect(() => {
+    if (view === 'catalog') loadCatalogPage(true);
+  }, [view, loadCatalogPage]);
+
+  // Infinite scroll
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el || view !== 'catalog') return;
+    const onScroll = () => {
+      if (loadingMore || !hasMore || loading) return;
+      if (el.scrollTop + el.clientHeight >= el.scrollHeight - 400) {
+        loadCatalogPage(false);
+      }
+    };
+    el.addEventListener('scroll', onScroll, { passive: true });
+    return () => el.removeEventListener('scroll', onScroll);
+  }, [view, loadingMore, hasMore, loading, loadCatalogPage]);
+
+  // Debounced search
+  const searchTimerRef = useRef<number | null>(null);
+  const handleQueryChange = (q: string) => {
+    setQuery(q);
+    if (searchTimerRef.current) window.clearTimeout(searchTimerRef.current);
+    searchTimerRef.current = window.setTimeout(() => {
+      if (view === 'catalog') loadCatalogPage(true);
+    }, 500);
   };
+
+  // Sync registry
+  const handleSync = async () => {
+    setSyncing(true);
+    try {
+      if (await isBackendAvailable()) {
+        await mcpSyncRegistry();
+        await loadCatalogPage(true);
+      }
+    } catch { /* ok */ }
+    setSyncing(false);
+  };
+
+  const connectedCount = connected.filter((c) => c.connected).length;
+
+  // Toggle connected
+  const toggleConnect = async (id: string) => {
+    const item = connected.find((c) => c.id === id);
+    if (!item) return;
+    const wasConnected = item.connected;
+    setConnected((cur) => cur.map((c) => c.id === id ? { ...c, connected: !wasConnected } : c));
+    if (await isBackendAvailable()) {
+      try {
+        if (wasConnected) await disconnectMcp(id);
+        else await connectMcp(id);
+      } catch {
+        setConnected((cur) => cur.map((c) => c.id === id ? { ...c, connected: wasConnected } : c));
+      }
+    }
+  };
+
+  // Connect from catalog
+  const handleConnect = async (entry: McpCatalogEntry, credential?: string, baseUrl?: string) => {
+    setConnectingId(entry.id);
+    try {
+      if (!(await isBackendAvailable())) return;
+      if (entry.authType === 'oauth') {
+        // OAuth flow — get authorize URL and open in new window
+        const { authorizeUrl } = await mcpOauthStart(entry.id);
+        window.open(authorizeUrl, '_blank', 'width=600,height=700');
+        setConnectModal(null);
+      } else {
+        const opts: { apiKey?: string; baseUrl?: string; enabled: boolean } = { enabled: true };
+        if (credential) opts.apiKey = credential;
+        if (baseUrl) opts.baseUrl = baseUrl;
+        await connectMcp(entry.id, opts);
+        setConnected((cur) => [...cur, { id: entry.id, name: entry.name, category: entry.category, connected: true }]);
+        setConnectModal(null);
+      }
+    } catch (e) {
+      setError(`Connect failed: ${(e as Error).message}`);
+    }
+    setConnectingId(null);
+  };
+
+  const allCategories = ['All', ...categories.filter((c) => c !== 'All')];
+
+  // Catalog items not yet connected
+  const catalogFiltered = catalog.filter((e) => !connected.some((c) => c.id === e.id));
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
-      <div ref={headerRef} className="px-6 py-5 hairline-b flex items-end justify-between gap-4" style={{ background: 'rgba(6,7,9,0.68)', backdropFilter: 'blur(18px)', WebkitBackdropFilter: 'blur(18px)' }}>
+      {/* Header */}
+      <div ref={headerRef} className="px-6 py-5 hairline-b flex items-end justify-between gap-4" style={{ background: 'rgba(6,7,9,0.68)', backdropFilter: 'blur(18px)' }}>
         <div>
           <h1 className="hero-heading font-black uppercase tracking-tight leading-none" style={{ fontSize: 'clamp(1.6rem, 3.5vw, 2.4rem)' }}>Connectors</h1>
           <p className="text-sm mt-1 font-light" style={{ color: 'var(--text-dim)' }}>
-            {connectedCount} of {integrations.length} MCP servers connected
+            {view === 'catalog' ? `${catalogTotal} connectors available` : `${connectedCount} of ${connected.length} connected`}
           </p>
         </div>
         <div className="flex items-center gap-2">
+          {view === 'catalog' && (
+            <button onClick={handleSync} disabled={syncing} className="flex items-center gap-1.5 px-3 rounded-xl text-[11px] font-medium" style={{ height: 34, background: 'var(--surface-2)', border: '1px solid var(--hairline-strong)', color: 'var(--text-dim)', fontFamily: 'var(--font)' }}>
+              <RefreshCw size={12} className={syncing ? 'animate-spin' : ''} /> Sync
+            </button>
+          )}
           <div className="flex items-center gap-2 px-3 rounded-xl" style={{ height: 34, background: 'var(--surface-2)', border: '1px solid var(--hairline-strong)' }}>
             <Search size={13} style={{ color: 'var(--text-faint)' }} />
-            <input
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search integrations…"
-              className="bg-transparent outline-none text-sm w-40"
-              style={{ color: 'var(--text-primary)', fontFamily: 'var(--font)' }}
-            />
+            <input value={query} onChange={(e) => handleQueryChange(e.target.value)}
+              placeholder={view === 'catalog' ? 'Search 1000+ connectors…' : 'Search…'}
+              className="bg-transparent outline-none text-sm w-44" style={{ color: 'var(--text-primary)', fontFamily: 'var(--font)' }} />
           </div>
-          <button className="flex items-center gap-1.5 px-3.5 rounded-xl" style={{ height: 34, background: avatar.accent, color: '#fff', border: 'none', fontFamily: 'var(--font)', fontSize: 12 }}>
-            <Settings2 size={13} /> Manage MCP
+          <button onClick={() => setView(view === 'connected' ? 'catalog' : 'connected')}
+            className="flex items-center gap-1.5 px-3.5 rounded-xl text-[11px] font-medium"
+            style={{ height: 34, background: view === 'catalog' ? '#22C55E' : avatar.accent, color: '#fff', border: 'none', fontFamily: 'var(--font)' }}>
+            {view === 'catalog' ? <><Check size={13} /> Connected ({connectedCount})</> : <><Plug size={13} /> Browse All {catalogTotal > 0 ? catalogTotal : ''}</>}
           </button>
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto px-6 py-5" style={{ maxWidth: 1100, width: '100%', margin: '0 auto' }}>
-        <p className="text-[11px] font-medium uppercase tracking-widest mb-3" style={{ color: 'var(--text-faint)' }}>Meetings & voice</p>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 mb-6">
-          {CONNECTOR_GROUP.map((c) => (
-            <button
-              key={c.id}
-              onClick={() => c.id === 'phone' || c.id === 'meet' || c.id === 'zoom' || c.id === 'teams' ? setView('meetings') : setView('agent')}
-              className="integration-card card flex items-start gap-3 p-4 text-left transition-transform hover:-translate-y-0.5"
-              style={{ background: 'var(--surface-1)', border: '1px solid var(--hairline-strong)', fontFamily: 'var(--font)' }}
-              onMouseEnter={(e) => { e.currentTarget.style.borderColor = `${c.accent}66`; }}
-              onMouseLeave={(e) => { e.currentTarget.style.borderColor = 'var(--hairline-strong)'; }}
-            >
-              <span className="w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0" style={{ background: `${c.accent}16`, color: c.accent, border: `1px solid ${c.accent}44` }}>
-                {c.icon}
-              </span>
-              <span className="flex-1 min-w-0">
-                <span className="block text-sm font-semibold truncate" style={{ color: 'var(--text-primary)', fontFamily: 'var(--font)' }}>{c.name}</span>
-                <span className="block text-[11px] font-light mt-1 leading-relaxed" style={{ color: 'var(--text-dim)' }}>{c.desc}</span>
-                <span className="flex items-center gap-1.5 mt-2 text-[10px]" style={{ color: c.connected ? '#22c55e' : 'var(--text-faint)' }}>
-                  <span style={{ width: 6, height: 6, borderRadius: '50%', background: c.connected ? '#22c55e' : 'var(--text-faint)', boxShadow: c.connected ? '0 0 6px rgba(34,197,94,0.8)' : 'none' }} />
-                  {c.connected ? 'Ready' : 'Add'}
-                </span>
-              </span>
+      {/* Error banner */}
+      {error && (
+        <div className="mx-6 mt-3 px-4 py-2.5 rounded-xl flex items-center gap-2 text-[11px]" style={{ background: 'rgba(255,90,90,0.1)', border: '1px solid rgba(255,90,90,0.3)', color: '#FF8A8A' }}>
+          <WifiOff size={13} /> {error}
+          <button onClick={() => setError('')} className="ml-auto" style={{ color: '#FF8A8A' }}><X size={12} /></button>
+        </div>
+      )}
+
+      {/* Body */}
+      <div ref={scrollRef} className="flex-1 overflow-y-auto px-6 py-5" style={{ maxWidth: 1100, width: '100%', margin: '0 auto' }}>
+        {/* Category pills */}
+        <div className="flex gap-2 mb-5 flex-wrap">
+          {allCategories.slice(0, 30).map((c) => (
+            <button key={c} onClick={() => { setCategory(c); if (view === 'catalog') setTimeout(() => loadCatalogPage(true), 50); }}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-medium transition-colors"
+              style={{
+                background: category === c ? avatar.accent : 'var(--surface-2)',
+                color: category === c ? '#fff' : 'var(--text-dim)',
+                border: `1px solid ${category === c ? 'transparent' : 'var(--hairline-strong)'}`,
+                fontFamily: 'var(--font)',
+              }}>
+              {c !== 'All' && (CATEGORY_ICONS[c] ?? <Plug size={11} />)} {c}
             </button>
           ))}
         </div>
 
-        <div className="flex items-center justify-between mb-3">
-          <p className="text-[11px] font-medium uppercase tracking-widest" style={{ color: 'var(--text-faint)' }}>MCP servers</p>
-          <div className="flex gap-2">
-            {CATEGORIES.map((c) => (
-              <button
-                key={c}
-                onClick={() => setCategory(c)}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-medium transition-colors"
-                style={{
-                  background: category === c ? avatar.accent : 'var(--surface-2)',
-                  color: category === c ? '#fff' : 'var(--text-dim)',
-                  border: `1px solid ${category === c ? 'transparent' : 'var(--hairline-strong)'}`,
-                  fontFamily: 'var(--font)',
-                }}
-              >
-                {c !== 'All' && CATEGORY_ICONS[c]}
-                {c}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <div ref={gridRef} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-          {filtered.map((i) => {
-            const connected = i.status === 'connected';
-            return (
-              <div key={i.id} className="integration-card card flex items-start gap-3 p-4" style={{ background: 'var(--surface-1)' }}>
-                <span className="w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0" style={{ background: 'var(--surface-2)', color: avatar.accent, border: '1px solid var(--hairline-strong)' }}>
-                  {ICONS[i.name] ?? <Plug size={15} />}
-                </span>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="text-sm font-semibold truncate" style={{ color: 'var(--text-primary)', fontFamily: 'var(--font)' }}>{i.name}</span>
-                    <span className="flex items-center gap-1.5 flex-shrink-0">
-                      <span className="flex items-center gap-1 text-[9px] px-1.5 py-0.5 rounded-md" style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid var(--hairline)', color: 'var(--text-faint)' }}>
-                        {CATEGORY_ICONS[i.category]} {i.category}
+        {/* CONNECTED VIEW */}
+        {view === 'connected' && (
+          <>
+            {connected.length === 0 && (
+              <div className="text-center py-16">
+                <p className="text-sm font-light" style={{ color: 'var(--text-faint)' }}>No connectors configured yet.</p>
+                <button onClick={() => setView('catalog')} className="mt-4 flex items-center gap-1.5 px-4 rounded-xl text-sm font-medium mx-auto" style={{ height: 38, background: avatar.accent, color: '#fff', border: 'none', fontFamily: 'var(--font)' }}>
+                  <Plug size={14} /> Browse Catalog
+                </button>
+              </div>
+            )}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+              {connected.filter((c) => category === 'All' || c.category === category).map((i) => (
+                <div key={i.id} className="conn-card card flex items-start gap-3 p-4" style={{ background: 'var(--surface-1)', border: '1px solid var(--hairline-strong)' }}>
+                  <span className="w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0" style={{ background: i.connected ? '#22C55E16' : 'var(--surface-2)', color: i.connected ? '#22C55E' : avatar.accent, border: `1px solid ${i.connected ? '#22C55E44' : 'var(--hairline-strong)'}` }}>
+                    {i.connected ? <Check size={15} /> : <Plug size={15} />}
+                  </span>
+                  <div className="flex-1 min-w-0">
+                    <span className="text-sm font-semibold truncate block" style={{ color: 'var(--text-primary)', fontFamily: 'var(--font)' }}>{i.name}</span>
+                    <span className="text-[9px] px-1.5 py-0.5 rounded-md mt-1 inline-block" style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid var(--hairline)', color: 'var(--text-faint)' }}>{i.category}</span>
+                    <div className="mt-2 flex items-center justify-between">
+                      <span className="flex items-center gap-1.5 text-[10px]" style={{ color: i.connected ? '#22c55e' : 'var(--text-faint)' }}>
+                        <span style={{ width: 6, height: 6, borderRadius: '50%', background: i.connected ? '#22c55e' : 'var(--text-faint)', boxShadow: i.connected ? '0 0 6px rgba(34,197,94,0.8)' : 'none' }} />
+                        {i.connected ? 'Connected' : 'Disconnected'}
                       </span>
-                    </span>
-                  </div>
-                  <p className="text-[11px] font-light mt-1 leading-relaxed" style={{ color: 'var(--text-dim)' }}>{i.description}</p>
-                  <div className="mt-3 flex items-center justify-between">
-                    <span className="flex items-center gap-1.5 text-[10px]" style={{ color: connected ? '#22c55e' : 'var(--text-faint)' }}>
-                      <span style={{ width: 6, height: 6, borderRadius: '50%', background: connected ? '#22c55e' : 'var(--text-faint)', boxShadow: connected ? '0 0 6px rgba(34,197,94,0.8)' : 'none' }} />
-                      {connected ? 'Connected' : 'Disconnected'}
-                    </span>
-                    <div className="flex items-center gap-2">
-                      <button
-                        className="flex items-center gap-1 text-[11px] font-medium px-2.5 py-1 rounded-lg transition-opacity hover:opacity-80"
-                        style={{ background: 'var(--surface-2)', border: '1px solid var(--hairline-strong)', color: 'var(--text-dim)', fontFamily: 'var(--font)' }}
-                        title="Open docs"
-                      >
-                        <ExternalLink size={10} /> Docs
-                      </button>
-                      <button
-                        onClick={() => toggle(i.id)}
-                        className="relative rounded-full transition-colors"
-                        style={{ width: 32, height: 18, background: connected ? avatar.accent : 'var(--surface-3)', border: '1px solid var(--hairline-strong)' }}
-                        title={connected ? 'Disconnect' : 'Connect'}
-                      >
-                        <span
-                          className="absolute rounded-full"
-                          style={{
-                            width: 12, height: 12, top: 2,
-                            left: connected ? 16 : 2,
-                            background: connected ? '#fff' : 'var(--text-faint)',
-                            transition: 'left 0.18s ease',
-                          }}
-                        />
+                      <button onClick={() => toggleConnect(i.id)} className="relative rounded-full" style={{ width: 32, height: 18, background: i.connected ? avatar.accent : 'var(--surface-3)', border: '1px solid var(--hairline-strong)' }}>
+                        <span className="absolute rounded-full" style={{ width: 12, height: 12, top: 2, left: i.connected ? 16 : 2, background: i.connected ? '#fff' : 'var(--text-faint)', transition: 'left 0.18s ease' }} />
                       </button>
                     </div>
                   </div>
                 </div>
-              </div>
-            );
-          })}
-        </div>
+              ))}
+            </div>
+          </>
+        )}
 
-        {filtered.length === 0 && (
-          <p className="text-sm font-light text-center py-16" style={{ color: 'var(--text-faint)' }}>No integrations match this filter.</p>
+        {/* CATALOG VIEW */}
+        {view === 'catalog' && (
+          <>
+            {loading && catalog.length === 0 && (
+              <div className="flex items-center justify-center py-16 gap-2">
+                <Loader2 size={16} className="animate-spin" style={{ color: avatar.accent }} />
+                <span className="text-sm" style={{ color: 'var(--text-dim)' }}>Loading catalog…</span>
+              </div>
+            )}
+            {!loading && catalogFiltered.length === 0 && !error && (
+              <div className="text-center py-16">
+                <p className="text-sm font-light" style={{ color: 'var(--text-faint)' }}>{query ? `No connectors match "${query}"` : 'No connectors found.'}</p>
+              </div>
+            )}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+              {catalogFiltered.map((entry) => {
+                const isConn = connected.some((c) => c.id === entry.id && c.connected);
+                const isConnecting = connectingId === entry.id;
+                const isOAuth = entry.authType === 'oauth';
+                const isNoAuth = entry.authType === 'none';
+                return (
+                  <div key={entry.id} className="conn-card card flex flex-col p-4" style={{ background: 'var(--surface-1)', border: `1px solid ${isConn ? '#22c55E44' : 'var(--hairline-strong)'}` }}
+                    onMouseEnter={(e) => { if (!isConn) e.currentTarget.style.borderColor = `${avatar.accent}44`; }}
+                    onMouseLeave={(e) => { if (!isConn) e.currentTarget.style.borderColor = isConn ? '#22c55E44' : 'var(--hairline-strong)'; }}>
+                    <div className="flex items-start gap-3">
+                      <span className="w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0" style={{ background: isConn ? '#22C55E16' : `${avatar.accent}16`, color: isConn ? '#22C55E' : avatar.accent, border: `1px solid ${isConn ? '#22C55E44' : `${avatar.accent}44`}` }}>
+                        {isConn ? <Check size={15} /> : (CATEGORY_ICONS[entry.category] ?? <Plug size={15} />)}
+                      </span>
+                      <div className="flex-1 min-w-0">
+                        <span className="text-sm font-semibold truncate block" style={{ color: 'var(--text-primary)', fontFamily: 'var(--font)' }}>{entry.name}</span>
+                        <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+                          <span className="text-[9px] px-1.5 py-0.5 rounded-md" style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid var(--hairline)', color: 'var(--text-faint)' }}>{entry.category}</span>
+                          <span className="flex items-center gap-1 text-[9px] px-1.5 py-0.5 rounded-md" style={{ background: isOAuth ? '#22C55E14' : isNoAuth ? '#9CA3AF14' : '#60A5FA14', border: `1px solid ${isOAuth ? '#22C55E33' : isNoAuth ? '#9CA3AF33' : '#60A5FA33'}`, color: isOAuth ? '#22C55E' : isNoAuth ? '#9CA3AF' : '#60A5FA' }}>
+                            {isOAuth ? <Shield size={10} /> : isNoAuth ? <Unlock size={10} /> : <Key size={10} />}
+                            {isOAuth ? 'OAuth' : isNoAuth ? 'No auth' : 'API Key'}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="flex-1 mt-2" />
+                    <div className="flex items-center gap-2 mt-3">
+                      {isConn ? (
+                        <span className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg text-[11px] font-medium" style={{ background: '#22C55E16', color: '#22C55E', border: '1px solid #22C55E33', fontFamily: 'var(--font)' }}>
+                          <Check size={12} /> Connected
+                        </span>
+                      ) : isNoAuth ? (
+                        <button onClick={() => handleConnect(entry)} disabled={isConnecting}
+                          className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg text-[11px] font-medium transition-all hover:opacity-90 disabled:opacity-50"
+                          style={{ background: '#22C55E', color: '#fff', border: 'none', fontFamily: 'var(--font)' }}>
+                          {isConnecting ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />}
+                          {isConnecting ? 'Connecting…' : 'Connect'}
+                        </button>
+                      ) : isOAuth ? (
+                        <button onClick={() => handleConnect(entry)} disabled={isConnecting}
+                          className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg text-[11px] font-medium transition-all hover:opacity-90 disabled:opacity-50"
+                          style={{ background: avatar.accent, color: '#fff', border: 'none', fontFamily: 'var(--font)' }}>
+                          {isConnecting ? <Loader2 size={12} className="animate-spin" /> : <Shield size={12} />}
+                          {isConnecting ? 'Authorizing…' : `Sign in with ${entry.name}`}
+                        </button>
+                      ) : (
+                        <button onClick={() => setConnectModal({ entry, credential: '', baseUrl: entry.baseUrl || '' })}
+                          className="flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg text-[11px] font-medium transition-all hover:opacity-90"
+                          style={{ background: avatar.accent, color: '#fff', border: 'none', fontFamily: 'var(--font)' }}>
+                          <Key size={12} /> Enter API Key
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            {loadingMore && (
+              <div className="flex items-center justify-center py-6 gap-2">
+                <Loader2 size={14} className="animate-spin" style={{ color: avatar.accent }} />
+                <span className="text-[11px]" style={{ color: 'var(--text-faint)' }}>Loading more…</span>
+              </div>
+            )}
+            {!loading && !loadingMore && hasMore && catalogFiltered.length > 0 && (
+              <p className="text-center text-[10px] py-4" style={{ color: '#555' }}>Scroll for more</p>
+            )}
+            {!loading && !loadingMore && !hasMore && catalogFiltered.length > 0 && (
+              <p className="text-center text-[10px] py-4" style={{ color: '#555' }}>All {catalogTotal} connectors loaded</p>
+            )}
+          </>
         )}
       </div>
+
+      {/* API Key Modal */}
+      {connectModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(6px)' }}>
+          <div className="w-[440px] rounded-2xl p-6" style={{ background: 'var(--surface-1)', border: '1px solid var(--hairline-strong)', boxShadow: '0 24px 80px rgba(0,0,0,0.5)' }}>
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-3">
+                <span className="w-10 h-10 rounded-xl flex items-center justify-center" style={{ background: `${avatar.accent}16`, color: avatar.accent, border: `1px solid ${avatar.accent}44` }}>
+                  <Key size={18} />
+                </span>
+                <div>
+                  <p className="text-sm font-semibold" style={{ color: 'var(--text-primary)', fontFamily: 'var(--font)' }}>Connect {connectModal.entry.name}</p>
+                  <p className="text-[11px] font-light" style={{ color: 'var(--text-faint)' }}>
+                    {connectModal.entry.authType === 'bearer' ? 'Enter your bearer token' : 'Enter your API key'}
+                  </p>
+                </div>
+              </div>
+              <button onClick={() => setConnectModal(null)} style={{ color: 'var(--text-faint)' }}><X size={16} /></button>
+            </div>
+            {connectModal.entry.baseUrl && (
+              <div className="mb-3">
+                <label className="text-[10px] font-medium uppercase tracking-widest mb-1 block" style={{ color: 'var(--text-faint)' }}>Base URL</label>
+                <input value={connectModal.baseUrl} onChange={(e) => setConnectModal({ ...connectModal, baseUrl: e.target.value })}
+                  placeholder="https://api.example.com"
+                  className="w-full px-3 py-2 rounded-lg text-sm outline-none"
+                  style={{ background: 'var(--surface-2)', border: '1px solid var(--hairline-strong)', color: 'var(--text-primary)', fontFamily: 'var(--font)' }} />
+              </div>
+            )}
+            <div className="mb-4">
+              <label className="text-[10px] font-medium uppercase tracking-widest mb-1 block" style={{ color: 'var(--text-faint)' }}>
+                {connectModal.entry.authType === 'bearer' ? 'Bearer Token' : 'API Key'}
+              </label>
+              <input value={connectModal.credential} onChange={(e) => setConnectModal({ ...connectModal, credential: e.target.value })}
+                placeholder={connectModal.entry.authType === 'bearer' ? 'Bearer eyJhbG…' : 'sk-…'}
+                type="password"
+                className="w-full px-3 py-2 rounded-lg text-sm outline-none"
+                style={{ background: 'var(--surface-2)', border: '1px solid var(--hairline-strong)', color: 'var(--text-primary)', fontFamily: 'var(--font)' }} />
+              <p className="text-[10px] mt-1 font-light" style={{ color: '#666' }}>Stored encrypted in your local keychain.</p>
+            </div>
+            <div className="flex gap-2">
+              <button onClick={() => setConnectModal(null)} className="flex-1 flex items-center justify-center py-2.5 rounded-xl text-sm font-medium" style={{ background: 'var(--surface-2)', border: '1px solid var(--hairline-strong)', color: 'var(--text-dim)', fontFamily: 'var(--font)' }}>Cancel</button>
+              <button onClick={() => handleConnect(connectModal.entry, connectModal.credential, connectModal.baseUrl)}
+                disabled={!connectModal.credential}
+                className="flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-xl text-sm font-medium disabled:opacity-40"
+                style={{ background: avatar.accent, color: '#fff', border: 'none', fontFamily: 'var(--font)' }}>
+                <Plug size={13} /> Connect
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

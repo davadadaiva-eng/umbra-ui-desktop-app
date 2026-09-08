@@ -1,7 +1,8 @@
 import { useRef, useEffect, useState } from 'react';
 import gsap from 'gsap';
 import { useAppStore } from '../stores/appStore';
-import { Search, Plus, Copy, Trash2, Lock, Globe, CreditCard, Wifi, KeyRound, Mail, Eye, EyeOff, Check } from 'lucide-react';
+import { isBackendAvailable, getAuditStats, type BackendError } from '../lib/backend';
+import { Search, Plus, Copy, Trash2, Lock, Globe, CreditCard, Wifi, KeyRound, Mail, Eye, EyeOff, Check, Shield } from 'lucide-react';
 
 interface VaultItem {
   id: number;
@@ -69,9 +70,26 @@ export function VaultView() {
   const [adding, setAdding] = useState(false);
   const [draftKind, setDraftKind] = useState<VaultKind>('password');
   const [draft, setDraft] = useState<{ name: string; secret: string }>({ name: '', secret: '' });
+  const [auditStats, setAuditStats] = useState<Record<string, unknown> | null>(null);
+  const [auditError, setAuditError] = useState('');
 
   useEffect(() => {
     setStage(loadVaultHash() ? 'unlock' : 'setup');
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      if (!(await isBackendAvailable())) return;
+      try {
+        const stats = await getAuditStats();
+        if (cancelled || !stats) return;
+        setAuditStats(stats as Record<string, unknown>);
+      } catch (e) {
+        if (!cancelled) setAuditError((e as BackendError).message || 'Failed to load audit stats');
+      }
+    })();
+    return () => { cancelled = true; };
   }, []);
 
   useEffect(() => {
@@ -154,6 +172,10 @@ export function VaultView() {
     setAdding(false);
   };
 
+  const auditEntries = auditStats ? (auditStats.entries ?? auditStats.totalEntries ?? 0) : 0;
+  const auditLastTime = auditStats?.lastEntryTime ? new Date(String(auditStats.lastEntryTime)) : null;
+  const auditIntegrity = auditStats?.integrity === true || auditStats?.integrityOk === true;
+
   if (stage !== 'open') {
     return (
       <div className="flex flex-col h-full items-center justify-center px-6">
@@ -235,6 +257,42 @@ export function VaultView() {
       </div>
 
       <div ref={listRef} className="flex-1 overflow-y-auto px-6 py-5" style={{ maxWidth: 880, width: '100%', margin: '0 auto' }}>
+        {auditStats && (
+          <div className="card p-4 mb-4" style={{ background: 'var(--surface-1)' }}>
+            <div className="flex items-center gap-2.5 mb-3">
+              <span className="w-8 h-8 rounded-lg flex items-center justify-center" style={{ background: `${avatar.accent}1c`, color: avatar.accent, border: `1px solid ${avatar.accent}44` }}>
+                <Shield size={14} />
+              </span>
+              <p className="text-sm font-semibold" style={{ color: 'var(--text-primary)', fontFamily: 'var(--font)' }}>Audit Vault</p>
+            </div>
+            <div className="grid grid-cols-3 gap-3">
+              <div className="rounded-lg p-3" style={{ background: 'var(--surface-2)', border: '1px solid var(--hairline)' }}>
+                <p className="text-[9px] uppercase tracking-wide" style={{ color: 'var(--text-faint)' }}>Log entries</p>
+                <p className="mt-1 text-lg font-bold tabular-nums" style={{ color: 'var(--text-primary)', fontFamily: 'var(--font)' }}>{String(auditEntries)}</p>
+              </div>
+              <div className="rounded-lg p-3" style={{ background: 'var(--surface-2)', border: '1px solid var(--hairline)' }}>
+                <p className="text-[9px] uppercase tracking-wide" style={{ color: 'var(--text-faint)' }}>Last entry</p>
+                <p className="mt-1 text-sm font-semibold" style={{ color: 'var(--text-primary)', fontFamily: 'var(--font)' }}>
+                  {auditLastTime ? auditLastTime.toLocaleDateString() : '—'}
+                </p>
+                {auditLastTime && (
+                  <p className="text-[10px] mt-0.5" style={{ color: 'var(--text-faint)' }}>{auditLastTime.toLocaleTimeString()}</p>
+                )}
+              </div>
+              <div className="rounded-lg p-3" style={{ background: 'var(--surface-2)', border: '1px solid var(--hairline)' }}>
+                <p className="text-[9px] uppercase tracking-wide" style={{ color: 'var(--text-faint)' }}>Integrity</p>
+                <p className="mt-1 text-sm font-semibold flex items-center gap-1.5" style={{ color: auditIntegrity ? '#22c55e' : '#f59e0b', fontFamily: 'var(--font)' }}>
+                  {auditIntegrity ? <Check size={12} /> : <Lock size={12} />}
+                  {auditIntegrity ? 'Verified' : 'Pending'}
+                </p>
+              </div>
+            </div>
+            {auditError && (
+              <p className="text-[11px] mt-2" style={{ color: '#f59e0b' }}>Audit stats unavailable: {auditError}</p>
+            )}
+          </div>
+        )}
+
         {adding && (
           <div className="card p-4 mb-4" style={{ background: 'var(--surface-1)' }}>
             <div className="flex items-center gap-1.5 mb-3 flex-wrap">
@@ -331,7 +389,7 @@ export function VaultView() {
         })}
 
         {filtered.length === 0 && (
-          <p className="text-sm font-light text-center py-16" style={{ color: 'var(--text-faint)' }}>Nothing in the vault matches “{query}”.</p>
+          <p className="text-sm font-light text-center py-16" style={{ color: 'var(--text-faint)' }}>Nothing in the vault matches "{query}".</p>
         )}
       </div>
     </div>

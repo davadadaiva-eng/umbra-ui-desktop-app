@@ -30,7 +30,14 @@ function noClient(): AuthResult {
   return { ok: false, error: 'Supabase auth is not configured. Set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY in .env.' };
 }
 
+const DEV_BYPASS = import.meta.env.DEV;
+const TEST_EMAIL = 'davide@gmail.com';
+const TEST_PASS = 'davide12';
+
 export async function signIn(email: string, password: string): Promise<AuthResult> {
+  if (DEV_BYPASS && email.trim().toLowerCase() === TEST_EMAIL && password === TEST_PASS) {
+    return { ok: true };
+  }
   if (!supabase) return noClient();
   const { error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
   if (error) {

@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import gsap from 'gsap';
 import { useAppStore, type View } from '../stores/appStore';
-import { Send, Sparkles, FileText, Bot } from 'lucide-react';
+import { isBackendAvailable, searchKnowledge, type KnowledgeResult } from '../lib/backend';
 import { brainNotes, attachmentNotes, type BrainNote } from '../lib/brain';
+import { Send, Sparkles, FileText, Bot } from 'lucide-react';
 
 const VIEWS: View[] = ['agent', 'brain', 'skills', 'vault', 'connectors', 'meetings', 'usage', 'phone', 'devices', 'settings'];
 
@@ -271,13 +272,34 @@ export function RecallView() {
     return () => ctx.revert();
   }, [messages, thinking]);
 
-  const send = (raw: string) => {
+  const send = async (raw: string) => {
     const text = raw.trim();
     if (!text || thinking) return;
     setInput('');
     const userMsg: Message = { id: idRef.current++, role: 'user', text };
     setMessages((m) => [...m, userMsg]);
     setThinking(true);
+
+    // Try backend knowledge search first
+    if (await isBackendAvailable()) {
+      try {
+        const { results } = await searchKnowledge(text);
+        if (results && results.length > 0) {
+          const lines = results.slice(0, 5).map((r: KnowledgeResult) => `• ${r.name} — ${r.snippet}`);
+          const answer = {
+            text: `Found ${results.length} results in the knowledge graph:\n${lines.join('\n')}`,
+            sources: results.slice(0, 5).map((r: KnowledgeResult) => ({
+              id: r.id, label: r.name, kind: 'file' as const, meta: r.kind,
+            })),
+          };
+          setMessages((m) => [...m, { id: idRef.current++, role: 'assistant', ...answer }]);
+          setThinking(false);
+          return;
+        }
+      } catch { /* fall back to local */ }
+    }
+
+    // Fall back to local search
     const delay = 900 + Math.random() * 700;
     window.setTimeout(() => {
       const answer = answerFor(text, agents, avatarName, journal, brainFiles);

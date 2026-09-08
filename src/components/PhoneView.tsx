@@ -1,7 +1,8 @@
 import { useRef, useEffect, useState } from 'react';
 import gsap from 'gsap';
 import { useAppStore } from '../stores/appStore';
-import { Phone, PhoneOff, Mic, MicOff, Volume2, PhoneIncoming, PhoneOutgoing, PhoneMissed, Plus, Trash2, Copy, Check, UserPlus } from 'lucide-react';
+import { isBackendAvailable, getTelcoStatus, configureTelco, telcoCall, type BackendError } from '../lib/backend';
+import { Phone, PhoneOff, Mic, MicOff, Volume2, PhoneIncoming, PhoneOutgoing, PhoneMissed, Plus, Trash2, Copy, Check, UserPlus, Settings, AlertCircle } from 'lucide-react';
 
 interface Call {
   id: number;
@@ -51,6 +52,32 @@ export function PhoneView() {
   const incoming = calls.filter((c) => c.kind === 'incoming').length;
   const outgoing = calls.filter((c) => c.kind === 'outgoing').length;
   const missed = calls.filter((c) => c.kind === 'missed').length;
+  const [telcoOnline, setTelcoOnline] = useState(false);
+
+  // Telco configuration state
+  const [showConfig, setShowConfig] = useState(false);
+  const [telcoConfig, setTelcoConfig] = useState({ apiKey: '', fromNumber: '', messagingProfileId: '' });
+  const [configSaving, setConfigSaving] = useState(false);
+  const [configError, setConfigError] = useState<string | null>(null);
+  const [configSuccess, setConfigSuccess] = useState(false);
+
+  // Voice call state
+  const [callTo, setCallTo] = useState('');
+  const [callLoading, setCallLoading] = useState(false);
+  const [callError, setCallError] = useState<string | null>(null);
+
+  // Fetch telco status from backend
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      if (!(await isBackendAvailable())) return;
+      try {
+        const status = await getTelcoStatus();
+        if (!cancelled) setTelcoOnline(!!(status as Record<string, unknown>).enabled);
+      } catch { /* keep seed data */ }
+    })();
+    return () => { cancelled = true; };
+  }, []);
 
   const copyNumber = () => {
     void navigator.clipboard?.writeText(UMBRA_NUMBER.replace(/\s/g, ''));
@@ -73,6 +100,50 @@ export function PhoneView() {
     a.download = 'umbra.vcf';
     a.click();
     setTimeout(() => URL.revokeObjectURL(url), 2000);
+  };
+
+  const handleSaveConfig = async () => {
+    setConfigSaving(true);
+    setConfigError(null);
+    setConfigSuccess(false);
+    try {
+      await configureTelco({
+        apiKey: telcoConfig.apiKey || undefined,
+        fromNumber: telcoConfig.fromNumber || undefined,
+        messagingProfileId: telcoConfig.messagingProfileId || undefined,
+      });
+      setConfigSuccess(true);
+      setTimeout(() => setConfigSuccess(false), 2000);
+    } catch (err) {
+      setConfigError((err as BackendError).message || 'Failed to save configuration');
+    } finally {
+      setConfigSaving(false);
+    }
+  };
+
+  const handleVoiceCall = async () => {
+    if (!callTo.trim()) return;
+    setCallLoading(true);
+    setCallError(null);
+    try {
+      await telcoCall(callTo.trim());
+      setOnCall(true);
+      setElapsed(0);
+      const newCall: Call = {
+        id: Date.now(),
+        name: `Call · ${callTo}`,
+        number: callTo,
+        kind: 'outgoing',
+        time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        dur: '—',
+      };
+      setCalls((cur) => [newCall, ...cur]);
+      setCallTo('');
+    } catch (err) {
+      setCallError((err as BackendError).message || 'Failed to initiate call');
+    } finally {
+      setCallLoading(false);
+    }
   };
 
   useEffect(() => {
@@ -110,6 +181,9 @@ export function PhoneView() {
             <span style={{ width: 7, height: 7, borderRadius: '50%', background: onCall ? '#22c55e' : 'var(--text-faint)', boxShadow: onCall ? '0 0 8px rgba(34,197,94,0.9)' : 'none' }} />
             {onCall ? 'Live call' : 'Idle'}
           </span>
+          <button onClick={() => setShowConfig((v) => !v)} className="flex items-center gap-1.5 px-3 rounded-xl" style={{ height: 34, background: showConfig ? avatar.accent : 'var(--surface-2)', color: showConfig ? '#fff' : 'var(--text-dim)', border: '1px solid var(--hairline-strong)', fontFamily: 'var(--font)', fontSize: 12 }}>
+            <Settings size={13} /> Config
+          </button>
           <button className="flex items-center gap-1.5 px-3.5 rounded-xl" style={{ height: 34, background: avatar.accent, color: '#fff', border: 'none', fontFamily: 'var(--font)', fontSize: 12 }}>
             <Plus size={13} /> New call
           </button>
@@ -153,6 +227,67 @@ export function PhoneView() {
             ))}
           </div>
         </div>
+
+        {showConfig && (
+          <div className="phone-block card p-5 mb-5" style={{ background: 'var(--surface-1)', border: '1px solid var(--hairline-strong)' }}>
+            <div className="flex items-center justify-between mb-3">
+              <p className="text-sm font-semibold flex items-center gap-2" style={{ color: 'var(--text-primary)', fontFamily: 'var(--font)' }}>
+                <Settings size={14} style={{ color: avatar.accent }} /> Telco Configuration
+              </p>
+              <span className="text-[11px] font-light" style={{ color: telcoOnline ? '#22c55e' : 'var(--text-faint)' }}>
+                {telcoOnline ? 'Connected' : 'Not configured'}
+              </span>
+            </div>
+            <div className="space-y-3">
+              <div>
+                <label className="text-[11px] font-semibold block mb-1" style={{ color: 'var(--text-dim)' }}>Telnyx API Key</label>
+                <input
+                  type="password"
+                  value={telcoConfig.apiKey}
+                  onChange={(e) => setTelcoConfig((c) => ({ ...c, apiKey: e.target.value }))}
+                  placeholder="KEY_..."
+                  className="w-full px-3 py-2 rounded-xl text-[13px] font-mono"
+                  style={{ background: 'rgba(0,0,0,0.28)', border: '1px solid var(--hairline)', color: 'var(--text-primary)', fontFamily: 'var(--font)' }}
+                />
+              </div>
+              <div>
+                <label className="text-[11px] font-semibold block mb-1" style={{ color: 'var(--text-dim)' }}>From Number</label>
+                <input
+                  type="text"
+                  value={telcoConfig.fromNumber}
+                  onChange={(e) => setTelcoConfig((c) => ({ ...c, fromNumber: e.target.value }))}
+                  placeholder="+14155550128"
+                  className="w-full px-3 py-2 rounded-xl text-[13px] font-mono"
+                  style={{ background: 'rgba(0,0,0,0.28)', border: '1px solid var(--hairline)', color: 'var(--text-primary)', fontFamily: 'var(--font)' }}
+                />
+              </div>
+              <div>
+                <label className="text-[11px] font-semibold block mb-1" style={{ color: 'var(--text-dim)' }}>Messaging Profile ID</label>
+                <input
+                  type="text"
+                  value={telcoConfig.messagingProfileId}
+                  onChange={(e) => setTelcoConfig((c) => ({ ...c, messagingProfileId: e.target.value }))}
+                  placeholder="UUID"
+                  className="w-full px-3 py-2 rounded-xl text-[13px] font-mono"
+                  style={{ background: 'rgba(0,0,0,0.28)', border: '1px solid var(--hairline)', color: 'var(--text-primary)', fontFamily: 'var(--font)' }}
+                />
+              </div>
+              {configError && (
+                <div className="flex items-center gap-2 text-[11px] px-3 py-2 rounded-lg" style={{ background: '#ef44441c', border: '1px solid #ef444433', color: '#ef4444' }}>
+                  <AlertCircle size={12} /> {configError}
+                </div>
+              )}
+              {configSuccess && (
+                <div className="flex items-center gap-2 text-[11px] px-3 py-2 rounded-lg" style={{ background: '#22c55e1c', border: '1px solid #22c55e33', color: '#22c55e' }}>
+                  <Check size={12} /> Configuration saved
+                </div>
+              )}
+              <button onClick={handleSaveConfig} disabled={configSaving} className="w-full py-2.5 rounded-xl text-sm font-semibold flex items-center justify-center gap-2" style={{ background: avatar.accent, color: '#fff', border: 'none', fontFamily: 'var(--font)', opacity: configSaving ? 0.6 : 1 }}>
+                {configSaving ? 'Saving…' : 'Save configuration'}
+              </button>
+            </div>
+          </div>
+        )}
 
         {onCall && (
           <div className="phone-block card p-5 mb-5" style={{ background: `linear-gradient(135deg, ${avatar.accent}1e, transparent 70%)`, border: `1px solid ${avatar.accent}44` }}>
@@ -222,10 +357,37 @@ export function PhoneView() {
           </div>
 
           <div className="phone-block card p-5 md:col-span-2" style={{ background: 'var(--surface-1)' }}>
-            <p className="text-sm font-semibold mb-3" style={{ color: 'var(--text-primary)', fontFamily: 'var(--font)' }}>Voice agent settings</p>
+            <p className="text-sm font-semibold mb-3" style={{ color: 'var(--text-primary)', fontFamily: 'var(--font)' }}>Voice & dial</p>
             <div className="space-y-3">
+              <div>
+                <label className="text-[11px] font-semibold block mb-1" style={{ color: 'var(--text-dim)' }}>Dial number</label>
+                <div className="flex gap-2">
+                  <input
+                    type="tel"
+                    value={callTo}
+                    onChange={(e) => setCallTo(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && handleVoiceCall()}
+                    placeholder="+1 415 555 0100"
+                    className="flex-1 px-3 py-2 rounded-xl text-[13px] font-mono"
+                    style={{ background: 'rgba(0,0,0,0.28)', border: '1px solid var(--hairline)', color: 'var(--text-primary)', fontFamily: 'var(--font)' }}
+                  />
+                  <button
+                    onClick={handleVoiceCall}
+                    disabled={callLoading || !callTo.trim()}
+                    className="h-9 px-3.5 rounded-xl flex items-center gap-1.5 text-xs font-semibold"
+                    style={{ background: avatar.accent, color: '#fff', border: 'none', fontFamily: 'var(--font)', opacity: callLoading || !callTo.trim() ? 0.5 : 1 }}
+                  >
+                    <Phone size={13} /> {callLoading ? 'Dialing…' : 'Call'}
+                  </button>
+                </div>
+              </div>
+              {callError && (
+                <div className="flex items-center gap-2 text-[11px] px-3 py-2 rounded-lg" style={{ background: '#ef44441c', border: '1px solid #ef444433', color: '#ef4444' }}>
+                  <AlertCircle size={12} /> {callError}
+                </div>
+              )}
               {[
-                { label: 'Greeting script', value: '“Ciao, sono l\u2019assistente di Umbra. Come posso aiutarti oggi?”' },
+                { label: 'Greeting script', value: '"Ciao, sono l\u2019assistente di Umbra. Come posso aiutarti oggi?"' },
                 { label: 'Language', value: 'Italian · auto-detect' },
                 { label: 'Answer policy', value: 'Realtime · wait for pause ≥ 600 ms' },
                 { label: 'Skill routing', value: 'Router picks narrowest relevant skill' },

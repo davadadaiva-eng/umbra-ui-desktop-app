@@ -1,7 +1,12 @@
 import { useMemo, useRef, useEffect, useState, type JSX } from 'react';
 import gsap from 'gsap';
 import { useAppStore } from '../stores/appStore';
+import { isBackendAvailable, getMcpCatalog, type McpCatalogEntry } from '../lib/backend';
 import { Search, Cpu, Hammer, Play, Layout, TrendingUp, Share2, Megaphone, Handshake, Clapperboard, Phone, Scale, LifeBuoy, BarChart3, ShieldCheck, Route, Users, Cloud, Newspaper, Languages, Rocket, Truck, Lightbulb, Sparkles, Wrench } from 'lucide-react';
+
+interface McpCatalogEntryExtended extends McpCatalogEntry {
+  description?: string;
+}
 
 interface MicroSkill {
   id: string;
@@ -16,7 +21,7 @@ interface SkillDomain {
   skills: MicroSkill[];
 }
 
-const DOMAINS: SkillDomain[] = [
+let DOMAINS: SkillDomain[] = [
   { n: 1, title: 'Tax & Accounting', tagline: 'Il Commercialista Digitale', icon: <Scale size={15} />, skills: [
     { id: 'tax-ai/regime-fiscale-analyzer', name: 'Regime fiscale analyzer — simulation of tax regimes (Forfettario, Semplificato, Ordinario, SRL)' },
     { id: 'accounting/f24-tax-calculator', name: 'F24 tax calculator — withholding, contributions and F24 generation' },
@@ -174,6 +179,45 @@ export function SkillsView() {
       }
     }, [headerRef, listRef]);
     return () => ctx.revert();
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      if (!(await isBackendAvailable())) return;
+      try {
+        const { entries } = await getMcpCatalog({ limit: 200 });
+        if (cancelled || !entries.length) return;
+        const byCategory = new Map<string, McpCatalogEntry[]>();
+        for (const e of entries) {
+          const cat = e.category || 'Other';
+          if (!byCategory.has(cat)) byCategory.set(cat, []);
+          byCategory.get(cat)!.push(e);
+        }
+        const iconMap: Record<string, JSX.Element> = {
+          Tax: <Scale size={15} />, Frontend: <Layout size={15} />, SEO: <TrendingUp size={15} />,
+          Social: <Share2 size={15} />, Ads: <Megaphone size={15} />, Sales: <Handshake size={15} />,
+          Media: <Clapperboard size={15} />, Comms: <Phone size={15} />, Legal: <LifeBuoy size={15} />,
+          Finance: <BarChart3 size={15} />, Security: <ShieldCheck size={15} />, Product: <Route size={15} />,
+          HR: <Users size={15} />, DevOps: <Cloud size={15} />, PR: <Newspaper size={15} />,
+          Localization: <Languages size={15} />, Fundraising: <Rocket size={15} />, Logistics: <Truck size={15} />,
+          AI: <Sparkles size={15} />, Other: <Cpu size={15} />,
+        };
+        let n = 1;
+        const domains: SkillDomain[] = [];
+        for (const [cat, items] of byCategory) {
+          domains.push({
+            n: n++,
+            title: cat,
+            tagline: `${items.length} skills`,
+            icon: iconMap[cat] ?? <Cpu size={15} />,
+            skills: items.map((e: McpCatalogEntryExtended) => ({ id: e.id, name: e.description || e.name })),
+          });
+        }
+        DOMAINS = domains;
+      } catch { /* keep seed data */ }
+    })();
+    return () => { cancelled = true; };
   }, []);
 
   const filtered = useMemo(() => {

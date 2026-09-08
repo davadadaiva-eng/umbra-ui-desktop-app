@@ -8,6 +8,7 @@ import { Sidebar } from './components/Sidebar';
 import { AgentView } from './components/AgentView';
 import { BrainView } from './components/BrainView';
 import { DevicesView } from './components/DevicesView';
+import { SmartHomeView } from './components/SmartHomeView';
 import { SettingsView } from './components/SettingsView';
 import { SkillsView } from './components/SkillsView';
 import { VaultView } from './components/VaultView';
@@ -15,13 +16,11 @@ import { ConnectorsView } from './components/ConnectorsView';
 import { MeetingsView } from './components/MeetingsView';
 import { UsageView } from './components/UsageView';
 import { PhoneView } from './components/PhoneView';
-import { UmbraBar } from './components/UmbraBar';
-import GlitterWrap from './components/GlitterWrap';
-
 const viewComponents: Record<string, React.FC> = {
   agent: AgentView,
   brain: BrainView,
   devices: DevicesView,
+  smarthome: SmartHomeView,
   skills: SkillsView,
   vault: VaultView,
   connectors: ConnectorsView,
@@ -56,16 +55,15 @@ function ViewRenderer() {
 }
 
 export default function App() {
-  const { isAuthenticated, isOnboarded, isAuthReady, currentView, initializeAuth } = useAppStore();
+  const { isAuthenticated, isOnboarded, isAuthReady, currentView, initializeAuth, connectBackend } = useAppStore();
 
   useEffect(() => {
     void initializeAuth();
   }, [initializeAuth]);
 
-  const isBarWindow = new URLSearchParams(window.location.search).get('view') === 'bar';
-  if (isBarWindow) {
-    return <UmbraBar />;
-  }
+  useEffect(() => {
+    connectBackend();
+  }, [connectBackend]);
 
   if (!isAuthReady) {
     return (
@@ -88,24 +86,6 @@ export default function App() {
 
   return (
     <div className="fixed inset-0" style={{ background: 'var(--bg)' }}>
-      <div className="absolute inset-0 z-0 pointer-events-none" style={{ opacity: 0.85 }}>
-        <GlitterWrap
-          particleCount={420}
-          color1="#ffffff"
-          color2="#60A5FA"
-          color3="#3B82F6"
-          speed={4}
-          density={55}
-          starSize={9}
-          focalDepth={14}
-          turbulence={0}
-          brightness={65}
-          glitterIntensity={4}
-          trailAmount={96}
-          reverse={false}
-        />
-      </div>
-
       <div className="relative z-10 h-full">
         {!isAuthenticated ? (
           <LoginScreen />

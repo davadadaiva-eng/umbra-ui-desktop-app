@@ -1,7 +1,8 @@
 import { useRef, useEffect, useState } from 'react';
 import gsap from 'gsap';
 import { useAppStore } from '../stores/appStore';
-import { TrendingUp, TrendingDown, Zap, BarChart3, Clock, AlertTriangle, ArrowUpRight, CircleDollarSign } from 'lucide-react';
+import { isBackendAvailable, getPlanUsage, getAuditStats, activatePlan, billingCheckout, getTenants, registerTenant, type BackendError } from '../lib/backend';
+import { TrendingUp, TrendingDown, Zap, BarChart3, Clock, AlertTriangle, ArrowUpRight, CircleDollarSign, Shield, Users, CreditCard } from 'lucide-react';
 
 const DAYS = 30;
 const TOTAL_DAYS = 31;
@@ -24,6 +25,15 @@ export function UsageView() {
   const headerRef = useRef<HTMLDivElement>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
   const [range, setRange] = useState<'30d' | '90d' | '12m'>('30d');
+  const [auditStats, setAuditStats] = useState<Record<string, unknown> | null>(null);
+  const [tenants, setTenants] = useState<unknown[]>([]);
+  const [tenantId, setTenantId] = useState('');
+  const [tenantName, setTenantName] = useState('');
+  const [tenantTier, setTenantTier] = useState('');
+  const [activatingTier, setActivatingTier] = useState<string | null>(null);
+  const [checkoutLoading, setCheckoutLoading] = useState<string | null>(null);
+  const [registerError, setRegisterError] = useState('');
+  const [registerSuccess, setRegisterSuccess] = useState('');
   const series = useRef(buildSeries()).current;
   const peak = maxIndex(series);
   const agentRows = Object.entries(usage.agents)
@@ -48,6 +58,67 @@ export function UsageView() {
     }, [headerRef, bodyRef]);
     return () => ctx.revert();
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      if (!(await isBackendAvailable())) return;
+      try {
+        const data = await getPlanUsage();
+        if (cancelled || !data) return;
+        void data;
+      } catch { /* keep local data */ }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      if (!(await isBackendAvailable())) return;
+      try {
+        const [stats, tenantList] = await Promise.all([getAuditStats(), getTenants()]);
+        if (cancelled) return;
+        if (stats) setAuditStats(stats as Record<string, unknown>);
+        if (tenantList) setTenants((tenantList as { tenants: unknown[] }).tenants ?? []);
+      } catch { /* ignore */ }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  const handleActivate = async (tier: string) => {
+    setActivatingTier(tier);
+    try {
+      await activatePlan(tier);
+    } catch { /* silent */ }
+    setActivatingTier(null);
+  };
+
+  const handleCheckout = async (tier: string) => {
+    setCheckoutLoading(tier);
+    try {
+      const res = await billingCheckout(tier);
+      if (res?.checkout?.url) window.open(res.checkout.url, '_blank');
+    } catch { /* silent */ }
+    setCheckoutLoading(null);
+  };
+
+  const handleRegisterTenant = async () => {
+    setRegisterError('');
+    setRegisterSuccess('');
+    if (!tenantId.trim()) { setRegisterError('Tenant ID is required.'); return; }
+    try {
+      await registerTenant(tenantId.trim(), tenantName.trim() || undefined, tenantTier.trim() || undefined);
+      setRegisterSuccess('Tenant registered.');
+      setTenantId('');
+      setTenantName('');
+      setTenantTier('');
+      const updated = await getTenants();
+      if (updated) setTenants((updated as { tenants: unknown[] }).tenants ?? []);
+    } catch (e) {
+      setRegisterError((e as BackendError).message || 'Registration failed');
+    }
+  };
 
   const max = Math.max(...series);
   const plan = 'Growth';
@@ -97,6 +168,29 @@ export function UsageView() {
             </div>
           ))}
         </div>
+
+        {auditStats && (
+          <div className="usage-block card p-4 mb-5" style={{ background: 'var(--surface-1)' }}>
+            <div className="flex items-center gap-2.5 mb-3">
+              <span className="w-8 h-8 rounded-lg flex items-center justify-center" style={{ background: `${avatar.accent}1c`, color: avatar.accent, border: `1px solid ${avatar.accent}44` }}>
+                <Shield size={14} />
+              </span>
+              <p className="text-sm font-semibold" style={{ color: 'var(--text-primary)', fontFamily: 'var(--font)' }}>Audit Vault</p>
+            </div>
+            <div className="grid grid-cols-3 gap-3">
+              {[
+                { label: 'Total entries', value: String((auditStats as Record<string, unknown>).entries ?? (auditStats as Record<string, unknown>).totalEntries ?? '—') },
+                { label: 'Last entry', value: (auditStats as Record<string, unknown>).lastEntryTime ? new Date(String((auditStats as Record<string, unknown>).lastEntryTime)).toLocaleDateString() : '—' },
+                { label: 'Integrity', value: (auditStats as Record<string, unknown>).integrity === true || (auditStats as Record<string, unknown>).integrityOk === true ? 'Verified' : 'Unknown' },
+              ].map((s) => (
+                <div key={s.label} className="rounded-lg p-2.5" style={{ background: 'var(--surface-2)', border: '1px solid var(--hairline)' }}>
+                  <p className="text-[9px] uppercase tracking-wide" style={{ color: 'var(--text-faint)' }}>{s.label}</p>
+                  <p className="mt-1 text-sm font-semibold" style={{ color: 'var(--text-primary)', fontFamily: 'var(--font)' }}>{s.value}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         <div className="usage-block card p-5 mb-5" style={{ background: 'var(--surface-1)' }}>
           <div className="flex items-center justify-between mb-4">
@@ -187,6 +281,110 @@ export function UsageView() {
                 </div>
               ))}
             </div>
+          </div>
+        </div>
+
+        <div className="usage-block card p-5 mb-5" style={{ background: 'var(--surface-1)' }}>
+          <div className="flex items-center gap-2.5 mb-4">
+            <span className="w-8 h-8 rounded-lg flex items-center justify-center" style={{ background: `${avatar.accent}1c`, color: avatar.accent, border: `1px solid ${avatar.accent}44` }}>
+              <CreditCard size={14} />
+            </span>
+            <p className="text-sm font-semibold" style={{ color: 'var(--text-primary)', fontFamily: 'var(--font)' }}>Plan & Billing</p>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
+            {[
+              { tier: 'Starter', desc: 'Up to 50,000 calls/mo' },
+              { tier: 'Growth', desc: 'Up to 1,000,000 calls/mo' },
+            ].map((p) => (
+              <div key={p.tier} className="rounded-xl p-4 flex items-center justify-between" style={{ background: 'var(--surface-2)', border: '1px solid var(--hairline-strong)' }}>
+                <div>
+                  <p className="text-sm font-bold" style={{ color: 'var(--text-primary)', fontFamily: 'var(--font)' }}>{p.tier}</p>
+                  <p className="text-[11px] font-light" style={{ color: 'var(--text-dim)' }}>{p.desc}</p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => void handleActivate(p.tier)}
+                    disabled={activatingTier === p.tier}
+                    className="px-3 py-1.5 rounded-lg text-[11px] font-medium transition-colors disabled:opacity-40"
+                    style={{ background: avatar.accent, color: '#fff', border: 'none', fontFamily: 'var(--font)' }}
+                  >
+                    {activatingTier === p.tier ? 'Activating…' : 'Activate'}
+                  </button>
+                  <button
+                    onClick={() => void handleCheckout(p.tier)}
+                    disabled={checkoutLoading === p.tier}
+                    className="px-3 py-1.5 rounded-lg text-[11px] font-medium transition-colors disabled:opacity-40"
+                    style={{ background: 'var(--surface-1)', color: 'var(--text-dim)', border: '1px solid var(--hairline-strong)', fontFamily: 'var(--font)' }}
+                  >
+                    {checkoutLoading === p.tier ? 'Loading…' : 'Checkout'}
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="usage-block card p-5 mb-5" style={{ background: 'var(--surface-1)' }}>
+          <div className="flex items-center gap-2.5 mb-4">
+            <span className="w-8 h-8 rounded-lg flex items-center justify-center" style={{ background: `${avatar.accent}1c`, color: avatar.accent, border: `1px solid ${avatar.accent}44` }}>
+              <Users size={14} />
+            </span>
+            <p className="text-sm font-semibold" style={{ color: 'var(--text-primary)', fontFamily: 'var(--font)' }}>Tenants</p>
+          </div>
+
+          {tenants.length > 0 ? (
+            <div className="space-y-2 mb-4">
+              {tenants.map((t, i) => {
+                const tenant = t as Record<string, unknown>;
+                return (
+                  <div key={i} className="flex items-center justify-between rounded-lg px-3 py-2" style={{ background: 'var(--surface-2)', border: '1px solid var(--hairline)' }}>
+                    <div>
+                      <span className="text-sm font-medium" style={{ color: 'var(--text-primary)', fontFamily: 'var(--font)' }}>{String(tenant.name ?? tenant.id ?? `Tenant ${i + 1}`)}</span>
+                      {tenant.tier ? <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded-md" style={{ background: `${avatar.accent}22`, color: avatar.accent, border: `1px solid ${avatar.accent}44` }}>{String(tenant.tier)}</span> : null}
+                    </div>
+                    <span className="text-[10px] font-mono" style={{ color: 'var(--text-faint)' }}>{String(tenant.id ?? '—')}</span>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <p className="text-[12px] font-light leading-relaxed mb-4" style={{ color: 'var(--text-faint)' }}>No tenants registered yet.</p>
+          )}
+
+          <div className="rounded-xl p-4" style={{ background: 'var(--surface-2)', border: '1px solid var(--hairline-strong)' }}>
+            <p className="text-[11px] uppercase tracking-wide font-semibold mb-3" style={{ color: 'var(--text-faint)' }}>Register tenant</p>
+            <div className="flex gap-2 flex-wrap">
+              <input
+                value={tenantId}
+                onChange={(e) => setTenantId(e.target.value)}
+                placeholder="Tenant ID"
+                className="flex-1 min-w-[120px] px-3 py-2 rounded-lg text-sm outline-none"
+                style={{ background: 'var(--surface-1)', border: '1px solid var(--hairline-strong)', color: 'var(--text-primary)', fontFamily: 'var(--font)' }}
+              />
+              <input
+                value={tenantName}
+                onChange={(e) => setTenantName(e.target.value)}
+                placeholder="Name (optional)"
+                className="flex-1 min-w-[120px] px-3 py-2 rounded-lg text-sm outline-none"
+                style={{ background: 'var(--surface-1)', border: '1px solid var(--hairline-strong)', color: 'var(--text-primary)', fontFamily: 'var(--font)' }}
+              />
+              <input
+                value={tenantTier}
+                onChange={(e) => setTenantTier(e.target.value)}
+                placeholder="Tier (optional)"
+                className="flex-1 min-w-[100px] px-3 py-2 rounded-lg text-sm outline-none"
+                style={{ background: 'var(--surface-1)', border: '1px solid var(--hairline-strong)', color: 'var(--text-primary)', fontFamily: 'var(--font)' }}
+              />
+              <button
+                onClick={() => void handleRegisterTenant()}
+                className="px-4 py-2 rounded-lg text-sm font-medium"
+                style={{ background: avatar.accent, color: '#fff', border: 'none', fontFamily: 'var(--font)' }}
+              >
+                Register
+              </button>
+            </div>
+            {registerError && <p className="text-[11px] mt-2" style={{ color: '#ef4444' }}>{registerError}</p>}
+            {registerSuccess && <p className="text-[11px] mt-2" style={{ color: '#22c55e' }}>{registerSuccess}</p>}
           </div>
         </div>
 
