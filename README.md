@@ -1,32 +1,217 @@
-# React + TypeScript + Vite
+# Umbra OS — Desktop AI Assistant
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+Umbra is a desktop AI assistant app ("agent") with a dark, futuristic
+interface. You chat with it, and it remembers things about you and your
+conversations. It lives in an Electron window and can talk to you out
+loud using your own local voice tools when they are installed.
 
-Currently, two official plugins are available:
+It is a front-end app (React + Vite + TypeScript) wrapped in Electron.
+There is no backend server you need to run: all data is kept on your
+machine (localStorage), and AI/voice calls go straight to online
+services from the app itself.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+## What the agent can do
 
-## React Compiler
+- **Chat.** By default it uses Google Gemini Flash 2.0. If Gemini is out
+  of quota or unreachable, the app automatically switches to a free
+  fallback provider (Umbra Free / pollinations) and retries, so the
+  agent usually still answers.
+- **Speak and listen.** At startup it checks for local voice engines:
+  - VoiceStudio → listens on port 3900
+  - voicebox → checks ports 5000 and 8000
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+  If a local engine is online it is used for speech-to-text and
+  text-to-speech. If not, the app falls back to browser voices, and
+  cloud transcription (OpenAI/Groq) can be enabled in Settings.
+- **Remember.** Every conversation is written to a journal. Facts are
+  extracted automatically and stored, so the agent can recall things
+  you told it earlier. Each "agent" (profile) keeps its own memory.
+- **Multiple panels** (see the left sidebar):
+  - Agent → the chat
+  - Connectors, Devices → integrations and hardware
+  - Vault → stored data
+  - Brain → visual graph of remembered facts
+  - Settings → choose AI provider/model, STT provider, voice
+  - Meetings, Recall, Skills, Usage, AgentPhone, Desktop 2 →
+    extra workspaces
 
-## Expanding the Oxlint configuration
+## Technology
 
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
+- React 19 + Vite + TypeScript
+- Tailwind CSS for styling
+- Zustand for app state (`src/stores/appStore.ts`)
+- Electron shell (`electron/main.cjs`, `electron/preload.cjs`)
+- Lucide icons, canvas particle effects
 
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
-```
+## Important files
 
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+- `src/lib/ai.ts` — AI providers, Gemini/OpenAI/Groq/Anthropic/free
+  calls, quota/network fallback logic
+- `src/lib/auth.ts` — Supabase Auth client (cloud login/signup)
+- `src/lib/stt.ts` — speech-to-text providers (local first)
+- `src/lib/voiceEngines.ts` — local engine detection (VoiceStudio,
+  voicebox) and browser voices
+- `src/lib/voices.ts` — voice list and TTS helpers
+- `src/lib/brain.ts` — fact extraction / memory store
+- `src/stores/appStore.ts` — global app state
+- `src/components/` — all screens (AgentView, SettingsView, …)
+- `electron/main.cjs` — Electron main process
+- `.env` — **LOCAL ONLY.** Your Gemini API key and Supabase auth
+  credentials live here. This file is NOT committed to git.
+- `.env.example` — Template. Copy it to `.env` and add your key.
+
+## How to run it
+
+1. Install dependencies:
+   ```bash
+   npm install
+   ```
+
+2. Create your local key file (collaborators must do this):
+   ```bash
+   cp .env.example .env
+   ```
+   and put your Google Gemini API key inside:
+   ```
+   VITE_GEMINI_KEY=your-key-here
+   ```
+   (If you leave it empty, you can paste a key later in Settings.)
+
+   Cloud login needs Supabase credentials too:
+   ```
+   VITE_SUPABASE_URL=https://<project>.supabase.co
+   VITE_SUPABASE_ANON_KEY=sb_publishable_...
+   ```
+   Get both from the Supabase dashboard → Project Settings → API.
+   Until these are set, the app shows the login screen but cannot
+   authenticate (it warns "Supabase auth is not configured").
+
+3. Run the desktop app:
+   ```bash
+   npm run desktop
+   ```
+   (This starts the Vite dev server and opens Electron.)
+
+   Or run just the web version in a browser:
+   ```bash
+   npm run dev
+   ```
+
+4. Build a packaged app:
+   ```bash
+   npm run build          # type-check + bundle
+   npm run desktop:pack   # electron-builder package
+   ```
+
+## Login
+
+Cloud auth via Supabase (email + password). Sign up on the login screen
+and you are signed in immediately — there is NO email verification step
+in the app right now (the verification screens still exist but are
+unused). Duplicate emails are rejected in-app with a message. The session
+survives restarts (localStorage + Supabase session). Set
+`VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` in `.env` to enable it.
+
+**Note:** for signup to return a session directly, the Supabase project
+should have "Confirm email" OFF (Authentication → Sign In / Up → Email).
+If it is ON, signup shows the "Email not confirmed" error which tells you
+how to fix it.
+
+## Supabase email setup (verification codes)
+
+Only relevant if email verification is re-enabled in the app (it is
+currently disabled). The code-only emails are configured in the Supabase
+**dashboard**, not in this repo.
+
+1. **Code instead of login link:**
+   Dashboard → Authentication → Email Templates.
+   - "Magic link or OTP" template (what the app's `sendCode` triggers)
+     → replace body with `{{ .Token }}` (the 6-digit code), remove the
+     `{{ .ConfirmationURL }}` link.
+   - "Confirm signup" template (fires on `signUp`) → same, code-only.
+
+   Subject: e.g. `{{ .Token }} is your Umbra OS verification code`.
+
+   Suggested body:
+   ```html
+   <h2>Your Umbra OS verification code</h2>
+   <p>Enter this 6-digit code in the Umbra desktop app. It expires
+   shortly.</p>
+   <p style="font-size:30px;font-weight:700;letter-spacing:6px;">{{ .Token }}</p>
+   <p>If you didn't request this, ignore this email.</p>
+   ```
+
+2. **Sender name "Umbra OS":**
+   Requires Custom SMTP (the shared built-in relay always sends as
+   "Supabase Auth <no-reply@supabase.co>", which Gmail shows as
+   "via supabase.co").
+   Dashboard → Project Settings → Authentication → SMTP Settings →
+   Enable Custom SMTP → SMTP Sender Name = "Umbra OS".
+   You need your own SMTP provider (Resend, SendGrid, Mailgun, …) and
+   the sender email must be on a domain you verified with it.
+
+## Recent important changes (know these before editing)
+
+- Gemini Flash (`gemini-2.0-flash`) is now the **default** AI provider.
+  The API key comes from `.env` (`VITE_GEMINI_KEY`), never from the source.
+- **AI fallback:** if the primary provider hits quota (429) or a network
+  error, `aiChat()` retries with the free provider (pollinations) up to
+  3 times before giving up. See `aiChat` / `aiChatOnceWithRetry` in `ai.ts`.
+- **Voice is LOCAL-FIRST:** VoiceStudio (port 3900) and voicebox are
+  detected at startup; they win over browser voices. VoicePicker shows
+  which engine is actually live ("Local engines offline" when none).
+- `electron/main.cjs` disables QUIC/HTTP3:
+  ```js
+  app.commandLine.appendSwitch('disable-quic');
+  app.commandLine.appendSwitch('disable-features', 'Http3');
+  ```
+  This was **required**: on some machines Chromium could not reach
+  `api.openai.com` and `text.pollinations.ai` ("Failed to fetch" /
+  `net::ERR_QUIC_PROTOCOL_ERROR`) while Node could. Do not remove these
+  lines without re-testing OpenAI + pollinations calls.
+- `index.html` has a strict Content-Security-Policy. Every external host
+  the renderer talks to **must** be whitelisted in `connect-src`, or it
+  will fail with a generic "Failed to fetch" (no QUIC/network involved,
+  CSP blocks it). Supabase needed `https://*.supabase.co` added here.
+  When you add integrations, whitelist their domains too.
+- Login is now **real auth** via Supabase (email/password, sign up + sign
+  in + reset password). The old hardcoded `davide@gmail.com`/`davide` demo
+  login is gone. Config lives in `.env` (`VITE_SUPABASE_URL` and
+  `VITE_SUPABASE_ANON_KEY`); session is restored on startup. See
+  `src/lib/auth.ts` and the `login`/`signup`/`signOut`/`initializeAuth`
+  actions in `src/stores/appStore.ts`.
+- Email verification is **disabled** in the app for now (plain login/signup;
+  signup auto-signs-in via `appStore.signup`). The old OTP flow
+  (`sendCode` → `signInWithOtp` → `verifyCode` → `verifyOtp`) still
+  exists in `src/lib/auth.ts` + `src/stores/appStore.ts` and the
+  `CodeVerificationScreen`/`VerifyCodeBox` components remain, but nothing
+  routes to them. Re-enable by restoring the `App.tsx` gate and the
+  `LoginScreen` pendingEmail flow if needed later.
+
+## Where to continue / good next steps
+
+- Add or improve agent skills (see the Skills panel and skills-related
+  code) so the agent can do real actions, not just chat.
+- Wire the Connectors / Devices panels to real integrations and hardware.
+- **Reliable cloud calls:** the renderer is sometimes blocked from certain
+  hosts (see QUIC note above). A solid upgrade is routing AI/STT calls
+  through the Electron **main** process (IPC), which uses Node's fetch and
+  is more reliable than Chromium's networking.
+- **Per-user cloud data:** auth now identifies the user (`supabase.auth`).
+  The next step is storing conversations/brain per user in a Supabase table
+  or at least namespacing localStorage by user id so multiple accounts on
+  one machine do not share the same vault.
+- **Tests:** there is no test suite yet. Add Vitest + React Testing
+  Library, starting with `src/lib/ai.ts` (fallback logic) and
+  `src/lib/voiceEngines.ts` (detection).
+- **Packaging:** electron-builder config can be extended for auto-updates
+  and code signing.
+
+## Checklist for collaborators
+
+1. Clone the repo.
+2. `npm install`
+3. Copy `.env.example` to `.env`, add `VITE_GEMINI_KEY` and the Supabase
+   credentials (`VITE_SUPABASE_URL` + `VITE_SUPABASE_ANON_KEY`).
+4. `npm run desktop`
+5. **Do NOT commit `.env`** (it is gitignored on purpose — it holds secrets).
