@@ -147,6 +147,65 @@ function createWindow() {
   }
 }
 
+// ── AI / STT / local-voice fetch bridge ───────────────────────────────────────
+// These helpers run in the main process and use Node's fetch so Chromium's
+// QUIC/HTTP3 quirks do not affect AI/STT/provider calls. Renderer code should
+// prefer these IPC routes when umbraDesktop is available; a direct browser
+// fetch is kept as a fallback for web/dev where IPC is not present.
+
+// ── Node fetch helpers for AI / STT / local-voice IPC paths ───────────────────────────────────────
+// These helpers run in the main process and use Node's fetch so Chromium's
+// QUIC/HTTP3 quirks do not affect AI/STT/provider calls. Renderer code should
+// prefer these IPC routes when umbraDesktop is available; a direct browser
+// fetch is kept as a fallback for web/dev where IPC is not present.
+
+async function nodeFetchResponseJson(res) {
+  const headers = {};
+  for (const [k, v] of res.headers.entries()) {
+    if (v) headers[k.toLowerCase()] = Array.isArray(v) ? v[0] : v;
+  }
+  try {
+    const ct = res.headers.get ? res.headers.get('content-type') : (res.headers['content-type'] || '');
+    if ((ct && ct.includes('audio/')) || (ct && ct.includes('octet-stream'))) {
+      const blob = await res.blob();
+      return { ok: res.ok, status: res.status, headers, body: blob };
+    }
+  } catch { /* ignore */ }
+  let body = null;
+  try {
+    const text = await res.text();
+    body = text ? JSON.parse(text) : null;
+  } catch {
+    body = text;
+  }
+  return { ok: res.ok, status: res.status, headers, body };
+}
+
+function serializeHeaders(headers) {
+  if (!headers || typeof headers !== 'object') return {};
+  const out = {};
+  for (const [k, v] of Object.entries(headers)) {
+    if (typeof v === 'string') out[k] = v;
+    else if (Array.isArray(v)) out[k] = v.join(', ');
+  }
+  return out;
+}
+
+async function nodeFetchProxy(providerId, url, method, headers, body, signalToken) {
+  const req = {
+    method: method || 'GET',
+    headers: serializeHeaders(headers),
+  };
+  if (body !== undefined && body !== null) {
+    req.body = body instanceof FormData ? body : body;
+  }
+  if (signalToken) {
+    req.signal = AbortSignal.timeout(60000);
+  }
+  const response = await fetch(url, req);
+  return nodeFetchResponseJson(response);
+}
+
 // ── SmartThings API bridge ───────────────────────────────────────
 // api.smartthings.com does not send CORS headers, so the renderer cannot call
 // it directly. The token lives in the main-process environment (never bundled)
@@ -268,6 +327,101 @@ function registerIpc() {
       return `data:image/${mime};base64,${buf.toString('base64')}`;
     } catch {
       return null;
+    }
+  });
+
+  ipcMain.handle('umbra:ai-fetch', async (_event, providerId, url, method, headers, body, signalToken) => {
+    try {
+      const res = await nodeFetchProxy(String(providerId || ''), String(url || ''), String(method || 'GET'), headers, body, signalToken);
+      return res;
+    } catch (err) {
+      return { ok: false, status: 0, headers: {}, body: { message: err instanceof Error ? err.message : String(err) } };
+    }
+  });
+
+  ipcMain.handle('umbra:stt-fetch', async (_event, providerId, url, method, headers, body) => {
+    try {
+      const res = await nodeFetchProxy(String(providerId || ''), String(url || ''), String(method || 'POST'), headers, body);
+      return res;
+    } catch (err) {
+      return { ok: false, status: 0, headers: {}, body: { message: err instanceof Error ? err.message : String(err) } };
+    }
+  });
+
+  ipcMain.handle('umbra:local-voice-probe', async (_event, url, timeoutMs, signalToken) => {
+    try {
+      const req = { method: 'HEAD', signal: AbortSignal.timeout(timeoutMs || 1500) };
+      const res = await fetch(String(url || ''), req);
+      return res.ok;
+    } catch {
+      return false;
+    }
+  });
+
+  ipcMain.handle('umbra:local-voice-fetch', async (_event, url, init) => {
+    try {
+      const res = await fetch(String(url || ''), init ? JSON.parse(JSON.stringify(init)) : undefined);
+      return nodeFetchResponseJson(res);
+    } catch (err) {
+      return { ok: false, status: 0, headers: {}, body: { message: err instanceof Error ? err.message : String(err) } };
+    }
+  });
+
+  ipcMain.handle('umbra:local-voice-fetch-stream', async (_event, url, init) => {
+    try {
+      const res = await fetch(String(url || ''), init ? JSON.parse(JSON.stringify(init)) : undefined);
+      const headers = {};
+      for (const [k, v] of res.headers.entries()) {
+        if (v) headers[k.toLowerCase()] = Array.isArray(v) ? v[0] : v;
+      }
+      return { ok: res.ok, status: res.status, headers, body: await res.blob() };
+    } catch (err) {
+      return { ok: false, status: 0, headers: {}, body: { message: err instanceof Error ? err.message : String(err) } };
+    }
+  });
+
+  ipcMain.handle('umbra:ai-fetch-stream', async (_event, providerId, url, method, headers, body, signalToken) => {
+    try {
+      const req = {
+        method: method || 'GET',
+        headers: serializeHeaders(headers),
+      };
+      if (body !== undefined && body !== null) {
+        req.body = body instanceof FormData ? body : body;
+      }
+      if (signalToken) {
+        req.signal = AbortSignal.timeout(60000);
+      }
+      const res = await fetch(url, req);
+      return nodeFetchResponseJson(res);
+    } catch (err) {
+      return { ok: false, status: 0, headers: {}, body: { message: err instanceof Error ? err.message : String(err) } };
+    }
+  });
+
+  ipcMain.handle('umbra:stt-fetch-stream', async (_event, providerId, url, method, headers, body) => {
+    try {
+      const req = {
+        method: method || 'POST',
+        headers: serializeHeaders(headers),
+      };
+      if (body !== undefined && body !== null) {
+        req.body = body instanceof FormData ? body : body;
+      }
+      const res = await fetch(url, req);
+      return nodeFetchResponseJson(res);
+    } catch (err) {
+      return { ok: false, status: 0, headers: {}, body: { message: err instanceof Error ? err.message : String(err) } };
+    }
+  });
+
+  ipcMain.handle('umbra:local-voice-probe-stream', async (_event, url, timeoutMs, signalToken) => {
+    try {
+      const req = { method: 'HEAD', signal: AbortSignal.timeout(timeoutMs || 1500) };
+      const res = await fetch(String(url || ''), req);
+      return res.ok;
+    } catch {
+      return false;
     }
   });
 

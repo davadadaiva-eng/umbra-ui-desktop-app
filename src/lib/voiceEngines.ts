@@ -16,11 +16,68 @@ export interface LocalEngineState {
   voicebox: boolean;
 }
 
+const testProbeStatus: Record<string, number> = {};
+
+export function setTestProbeStatus(url: string, status: number) {
+  testProbeStatus[url] = status;
+}
+
+export function resetTestProbeStatus() {
+  for (const key of Object.keys(testProbeStatus)) {
+    delete testProbeStatus[key];
+  }
+}
+
+export function setTestFetchStatus(url: string, status: number) {
+  testProbeStatus[url] = status;
+}
+
+export function resetTestFetchStatuses() {
+  for (const key of Object.keys(testProbeStatus)) {
+    delete testProbeStatus[key];
+  }
+}
+
+// IPC availability flag used by voiceEngines.ts to decide whether to probe
+// and fetch local voice engines through the Electron main process.
+export declare const umbraDesktop: {
+  localVoiceProbe?: (url: string, timeoutMs: number, signalToken?: string) => Promise<boolean>;
+  localVoiceFetch?: (url: string, init: unknown) => Promise<{ ok: boolean; status: number; headers: Record<string, string>; body: unknown }>;
+  localVoiceProbeStream?: (url: string, timeoutMs: number, signalToken?: string) => Promise<boolean>;
+  localVoiceFetchStream?: (url: string, init: unknown) => Promise<{ ok: boolean; status: number; headers: Record<string, string>; body: unknown }>;
+} | undefined;
+
+const desktop = (typeof window !== 'undefined' && (window as unknown as {
+  umbraDesktop?: {
+    localVoiceProbe?: (url: string, timeoutMs: number, signalToken?: string) => Promise<boolean>;
+    localVoiceFetch?: (url: string, init: unknown) => Promise<{ ok: boolean; status: number; headers: Record<string, string>; body: unknown }>;
+    localVoiceProbeStream?: (url: string, timeoutMs: number, signalToken?: string) => Promise<boolean>;
+    localVoiceFetchStream?: (url: string, init: unknown) => Promise<{ ok: boolean; status: number; headers: Record<string, string>; body: unknown }>;
+  }
+}).umbraDesktop);
+
+export const useDesktopVoiceFetch = typeof desktop?.localVoiceProbe === 'function' && typeof desktop?.localVoiceFetch === 'function';
+const useDesktopVoiceFetchStream = typeof desktop?.localVoiceProbeStream === 'function' && typeof desktop?.localVoiceFetchStream === 'function';
+
+const voiceFetch = useDesktopVoiceFetch ? desktop.localVoiceFetch : (url: string, init: unknown) => Promise.resolve({ ok: false, status: 0, headers: {}, body: { message: 'IPC voice fetch unavailable' } });
+const voiceFetchStream = useDesktopVoiceFetchStream ? desktop.localVoiceFetchStream : voiceFetch;
+const voiceProbe = useDesktopVoiceFetch ? desktop.localVoiceProbe : (() => Promise.resolve(false)) as (url: string, timeoutMs: number, signalToken?: string) => Promise<boolean>;
+const voiceProbeStream = useDesktopVoiceFetchStream ? desktop.localVoiceProbeStream : voiceProbe;
+
 async function probe(url: string, timeoutMs: number): Promise<boolean> {
+  if (useDesktopVoiceFetch) {
+    return voiceProbe(url, timeoutMs);
+  }
+
+  if (Object.keys(testProbeStatus).length > 0) {
+    const status = testProbeStatus[url];
+    return status == null ? false : status === 200;
+  }
+
   try {
     const ctrl = new AbortController();
     const t = window.setTimeout(() => ctrl.abort(), timeoutMs);
-    const r = await fetch(url, { signal: ctrl.signal });
+    const r = await window.fetch(url, { signal: ctrl.signal });
     window.clearTimeout(t);
     return r.ok;
   } catch {
@@ -46,10 +103,11 @@ export async function listLocalVoices(): Promise<{ engines: LocalEngineState; vo
   const voices: LocalVoice[] = [];
   if (engines.voicestudio) {
     try {
-      const r = await fetch(`${VOICESTUDIO_BASE}/v1/audio/voices`);
+      const r = useDesktopVoiceFetch ? await voiceFetch(`${VOICESTUDIO_BASE}/v1/audio/voices`, undefined) : await window.fetch(`${VOICESTUDIO_BASE}/v1/audio/voices`);
       if (r.ok) {
-        const data = (await r.json()) as { voices?: unknown };
-        const arr = Array.isArray(data?.voices) ? (data.voices as Record<string, unknown>[]) : [];
+        const rawBody = r.body;
+        const data = (typeof rawBody === 'object' && rawBody !== null && 'voices' in rawBody) ? (rawBody as { voices?: unknown }).voices : null;
+        const arr = Array.isArray(data) ? data : [];
         for (const v of arr) {
           if (typeof v.voice_id === 'string') {
             voices.push({
@@ -68,9 +126,10 @@ export async function listLocalVoices(): Promise<{ engines: LocalEngineState; vo
   }
   if (engines.voicebox) {
     try {
-      const r = await fetch(`${VOICEBOX_BASE}/profiles`);
+      const r = useDesktopVoiceFetch ? await voiceFetch(`${VOICEBOX_BASE}/profiles`, undefined) : await window.fetch(`${VOICEBOX_BASE}/profiles`);
       if (r.ok) {
-        const arr = (await r.json()) as Record<string, unknown>[];
+        const rawBody = r.body;
+        const arr = (typeof rawBody === 'object' && rawBody !== null && Array.isArray(rawBody)) ? rawBody as Record<string, unknown>[] : [];
         if (Array.isArray(arr)) {
           for (const p of arr) {
             if (p && typeof p.id === 'string') {
@@ -103,10 +162,10 @@ export async function transcribeLocal(blob: Blob): Promise<string> {
       const form = new FormData();
       form.append('file', blob, audioFileName(blob));
       form.append('model', 'whisper-1');
-      const r = await fetch(`${VOICESTUDIO_BASE}/v1/audio/transcriptions`, { method: 'POST', body: form });
+      const r = useDesktopVoiceFetch ? await voiceFetch(`${VOICESTUDIO_BASE}/v1/audio/transcriptions`, { method: 'POST', body: form }) : await window.fetch(`${VOICESTUDIO_BASE}/v1/audio/transcriptions`, { method: 'POST', body: form });
       if (r.ok) {
-        const j = (await r.json()) as { text?: string };
-        const text = (j.text ?? '').trim();
+        const j = (typeof r.body === 'object' && r.body !== null && 'text' in r.body) ? (r.body as { text?: string }).text : undefined;
+        const text = (j ?? '').trim();
         if (text) return text;
         errors.push('VoiceStudio: no speech recognized');
       } else {
@@ -122,12 +181,12 @@ export async function transcribeLocal(blob: Blob): Promise<string> {
       form.append('file', blob, audioFileName(blob));
       form.append('model', 'turbo');
       form.append('language', 'en');
-      const r = await fetch(`${VOICEBOX_BASE}/transcribe`, { method: 'POST', body: form });
+      const r = useDesktopVoiceFetch ? await voiceFetch(`${VOICEBOX_BASE}/transcribe`, { method: 'POST', body: form }) : await window.fetch(`${VOICEBOX_BASE}/transcribe`, { method: 'POST', body: form });
       if (r.status === 202) {
         errors.push('voicebox is downloading its Whisper model');
       } else if (r.ok) {
-        const j = (await r.json()) as { text?: string };
-        const text = (j.text ?? '').trim();
+        const j = (typeof r.body === 'object' && r.body !== null && 'text' in r.body) ? (r.body as { text?: string }).text : undefined;
+        const text = (j ?? '').trim();
         if (text) return text;
         errors.push('voicebox: no speech recognized');
       } else {
@@ -145,8 +204,8 @@ async function pollVoiceboxGeneration(id: string, timeoutMs = 90000): Promise<{ 
   const ctrl = new AbortController();
   const t = window.setTimeout(() => ctrl.abort(), timeoutMs);
   try {
-    const r = await fetch(`${VOICEBOX_BASE}/generate/${id}/status`, { signal: ctrl.signal });
-    if (!r.ok || !r.body) throw new Error(`voicebox status ${r.status}`);
+    const r = useDesktopVoiceFetch ? await voiceFetch(`${VOICEBOX_BASE}/generate/${id}/status`, { signal: ctrl.signal }) : await window.fetch(`${VOICEBOX_BASE}/generate/${id}/status`, { signal: ctrl.signal });
+    if (!r.ok || (!r.body || typeof r.body !== 'object') || !('getReader' in r.body)) throw new Error(`voicebox status ${r.status}: no stream`);
     const reader = r.body.getReader();
     const decoder = new TextDecoder();
     let status = 'queued';
@@ -176,34 +235,30 @@ async function pollVoiceboxGeneration(id: string, timeoutMs = 90000): Promise<{ 
 }
 
 export async function speakWithVoiceStudio(text: string, voiceId: string): Promise<string> {
-  const r = await fetch(`${VOICESTUDIO_BASE}/v1/audio/speech`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model: 'tts-1', voice: voiceId || 'alloy', input: text }),
-  });
+  const r = useDesktopVoiceFetch ? await voiceFetch(`${VOICESTUDIO_BASE}/v1/audio/speech`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: 'tts-1', voice: voiceId || 'alloy', input: text }) }) : await window.fetch(`${VOICESTUDIO_BASE}/v1/audio/speech`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: 'tts-1', voice: voiceId || 'alloy', input: text }) });
   if (!r.ok) {
     let msg = `VoiceStudio speak ${r.status}`;
     try {
-      const j = (await r.json()) as { detail?: unknown };
-      if (j.detail) msg = typeof j.detail === 'string' ? j.detail.slice(0, 200) : JSON.stringify(j.detail).slice(0, 200);
+      const rawBody = r.body;
+      if (rawBody && typeof rawBody === 'object' && 'detail' in rawBody) {
+        const d = rawBody.detail;
+        msg = typeof d === 'string' ? d.slice(0, 200) : JSON.stringify(d).slice(0, 200);
+      }
     } catch {
       // ignore
     }
     throw new Error(msg);
   }
-  const blob = await r.blob();
-  if (!blob.size) throw new Error('VoiceStudio returned empty audio');
-  return URL.createObjectURL(blob);
+  const blob = (r.body && typeof r.body === 'object' && 'size' in r.body && typeof (r.body as { size: number }).size === 'number') ? (r.body as { size: number; type?: string }) : null;
+  if (!blob || !blob.size) throw new Error('VoiceStudio returned empty audio');
+  return URL.createObjectURL(blob as Blob);
 }
 
 export async function speakWithVoicebox(text: string, profileId: string, timeoutMs = 90000): Promise<string> {
-  const res = await fetch(`${VOICEBOX_BASE}/generate`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ profile_id: profileId, text, language: 'en' }),
-  });
-  if (!res.ok) throw new Error(`voicebox generate ${res.status}`);
-  const data = (await res.json()) as { id?: string; status?: string; error?: string };
+  const r = useDesktopVoiceFetch ? await voiceFetch(`${VOICEBOX_BASE}/generate`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ profile_id: profileId, text, language: 'en' }) }) : await window.fetch(`${VOICEBOX_BASE}/generate`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ profile_id: profileId, text, language: 'en' }) });
+  if (!r.ok) throw new Error(`voicebox generate ${r.status}`);
+  const rawBody = r.body;
+  const data = rawBody && typeof rawBody === 'object' && rawBody !== null ? rawBody as { id?: string; status?: string; error?: string } : {};
   if (data.error) throw new Error(data.error);
   if (!data.id) throw new Error('voicebox returned no generation id');
   const { status, error } = await pollVoiceboxGeneration(data.id, timeoutMs);

@@ -1,5 +1,14 @@
 import { transcribeLocal } from './voiceEngines';
 
+// IPC availability flag used by stt.ts to decide whether to route cloud STT
+// calls through the Electron main process (Node fetch) instead of the renderer
+// fetch.
+export declare const umbraDesktop: { sttFetch?: (providerId: string, url: string, method: string, headers: unknown, body: unknown) => Promise<{ ok: boolean; status: number; headers: Record<string, string>; body: unknown }> } | undefined;
+
+const desktop = (typeof window !== 'undefined' && (window as unknown as { umbraDesktop?: { sttFetch?: (providerId: string, url: string, method: string, headers: unknown, body: unknown) => Promise<{ ok: boolean; status: number; headers: Record<string, string>; body: unknown }> } }).umbraDesktop);
+
+export const useDesktopSttFetch = typeof desktop?.sttFetch === 'function';
+
 export interface STTConfig {
   provider: 'local' | 'openai' | 'groq';
   apiKey: string;
@@ -25,28 +34,38 @@ export async function transcribeAudio(config: STTConfig, blob: Blob): Promise<st
   form.append('file', blob, blob.type.includes('webm') ? 'recording.webm' : 'recording.wav');
   form.append('model', config.model || prov.models[0]);
   form.append('language', 'en');
-  let res: Response;
+
+  let res: { ok: boolean; status: number; headers: Record<string, string>; body: unknown };
   try {
-    res = await fetch(prov.baseUrl, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${config.apiKey}` },
-      body: form,
-    });
+    if (useDesktopSttFetch) {
+      res = await desktop.sttFetch(config.provider, prov.baseUrl, 'POST', { Authorization: `Bearer ${config.apiKey}` }, form);
+    } else {
+      const fetchRes = await fetch(prov.baseUrl, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${config.apiKey}` },
+        body: form,
+      });
+      res = { ok: fetchRes.ok, status: fetchRes.status, headers: {}, body: await fetchRes.json() };
+    }
   } catch {
     throw new Error('Speech-to-text is unreachable. Check your network.');
   }
   if (!res.ok) {
     let msg = `Speech-to-text error (HTTP ${res.status})`;
     try {
-      const j = (await res.json()) as { error?: { message?: string } };
-      if (j?.error?.message) msg = j.error.message;
+      const j = res.body && typeof res.body === 'object' && res.body !== null && 'error' in res.body
+        ? (res.body as { error?: { message?: string } }).error
+        : undefined;
+      if (j?.message) msg = j.message;
     } catch {
       // ignore
     }
     throw new Error(msg);
   }
-  const data = (await res.json()) as { text?: string };
-  const text = (data.text ?? '').trim();
+  const data = res.body && typeof res.body === 'object' && res.body !== null
+    ? (res.body as { text?: string })
+    : undefined;
+  const text = (data?.text ?? '').trim();
   if (!text) throw new Error('No speech recognized');
   return text;
 }

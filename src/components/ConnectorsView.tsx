@@ -8,8 +8,12 @@ import {
 } from '../lib/backend';
 import {
   Search, Plug, Cloud, Database, MessageSquare, CreditCard, Code2, Globe,
-  X, Loader2, Check, Key, Shield, Unlock, RefreshCw, WifiOff,
+  X, Loader2, Check, Key, Shield, Unlock, RefreshCw, WifiOff, Share2, LayoutGrid,
+  Download,
 } from 'lucide-react';
+import { CrmView } from './CrmView';
+import { SocialView } from './SocialView';
+import { CarruselView } from './CarruselView';
 
 const CATEGORY_ICONS: Record<string, JSX.Element> = {
   'AI & ML': <Cloud size={13} />, 'Cloud & DevOps': <Cloud size={13} />,
@@ -20,6 +24,16 @@ const CATEGORY_ICONS: Record<string, JSX.Element> = {
 
 const PAGE_SIZE = 80;
 
+type ConnView = 'connected' | 'catalog' | 'crm' | 'social' | 'carrusel';
+
+const CONN_TABS: { id: ConnView; label: string; icon: JSX.Element }[] = [
+  { id: 'connected', label: 'Connected', icon: <Plug size={12} /> },
+  { id: 'catalog', label: 'Catalog', icon: <Cloud size={12} /> },
+  { id: 'crm', label: 'CRM · Twenty', icon: <Database size={12} /> },
+  { id: 'social', label: 'Social', icon: <Share2 size={12} /> },
+  { id: 'carrusel', label: 'Carrusel', icon: <LayoutGrid size={12} /> },
+];
+
 export function ConnectorsView() {
   const { avatar } = useAppStore();
   const headerRef = useRef<HTMLDivElement>(null);
@@ -27,7 +41,7 @@ export function ConnectorsView() {
 
   const [query, setQuery] = useState('');
   const [category, setCategory] = useState('All');
-  const [view, setView] = useState<'connected' | 'catalog'>('catalog');
+  const [view, setView] = useState<ConnView>('catalog');
 
   const [connected, setConnected] = useState<ConnectedItem[]>([]);
   const [catalog, setCatalog] = useState<McpCatalogEntry[]>([]);
@@ -42,6 +56,7 @@ export function ConnectorsView() {
   const [connectingId, setConnectingId] = useState<string | null>(null);
   const [connectModal, setConnectModal] = useState<{ entry: McpCatalogEntry; credential: string; baseUrl: string } | null>(null);
   const [syncing, setSyncing] = useState(false);
+  const [addAll, setAddAll] = useState<{ running: boolean; added: number; noKey: number; oauth: number; failed: number } | null>(null);
 
   interface ConnectedItem { id: string; name: string; category: string; connected: boolean; tools?: number; }
 
@@ -52,25 +67,25 @@ export function ConnectorsView() {
     return () => ctx.revert();
   }, []);
 
+  // Fetch connected connectors
+  const loadConnected = useCallback(async () => {
+    if (!(await isBackendAvailable())) return;
+    try {
+      const data = await getMcpConnectors();
+      const conns = data.connectors as unknown as { entries: Array<{ id: string; name: string; kind: string; connected: boolean; tools: number }> };
+      if (conns?.entries?.length) {
+        setConnected(conns.entries.map((c) => ({
+          id: c.id, name: c.name, category: c.kind || 'Other',
+          connected: c.connected, tools: c.tools,
+        })));
+      }
+    } catch { /* keep empty */ }
+  }, []);
+
   // Fetch connected connectors on mount
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      if (!(await isBackendAvailable())) return;
-      try {
-        const data = await getMcpConnectors();
-        if (cancelled) return;
-        const conns = data.connectors as unknown as { entries: Array<{ id: string; name: string; kind: string; connected: boolean; tools: number }> };
-        if (conns?.entries?.length) {
-          setConnected(conns.entries.map((c) => ({
-            id: c.id, name: c.name, category: c.kind || 'Other',
-            connected: c.connected, tools: c.tools,
-          })));
-        }
-      } catch { /* keep empty */ }
-    })();
-    return () => { cancelled = true; };
-  }, []);
+    void loadConnected();
+  }, [loadConnected]);
 
   // Load a page of catalog entries
   const loadCatalogPage = useCallback(async (reset: boolean) => {
@@ -85,6 +100,7 @@ export function ConnectorsView() {
     }
     try {
       if (!(await isBackendAvailable())) { setError('Backend not available'); setLoading(false); setLoadingMore(false); return; }
+      setError('');
       const opts: { q?: string; category?: string; limit: number; offset: number } = {
         limit: PAGE_SIZE, offset: offsetRef.current,
       };
@@ -136,13 +152,62 @@ export function ConnectorsView() {
   // Sync registry
   const handleSync = async () => {
     setSyncing(true);
+    setError('');
     try {
       if (await isBackendAvailable()) {
-        await mcpSyncRegistry();
+        try {
+          await mcpSyncRegistry();
+        } catch { /* registry pull may partially fail; still reload the catalog */ }
         await loadCatalogPage(true);
       }
     } catch { /* ok */ }
     setSyncing(false);
+  };
+
+  // Add every connectable connector from the catalog: no-auth servers and
+  // servers whose API key is already in the vault connect immediately; the
+  // rest are reported back so the user can fill keys / do OAuth sign-in.
+  const handleAddAll = async () => {
+    setError('');
+    setAddAll({ running: true, added: 0, noKey: 0, oauth: 0, failed: 0 });
+    try {
+      if (!(await isBackendAvailable())) {
+        setError('Backend not available');
+        setAddAll(null);
+        return;
+      }
+      // Pull the full catalog in pages
+      const entries: McpCatalogEntry[] = [];
+      for (let offset = 0; ; ) {
+        const page = await getMcpCatalog({ limit: 200, offset });
+        entries.push(...page.entries);
+        if (page.entries.length === 0 || entries.length >= page.total) break;
+        offset += page.entries.length;
+      }
+      // Skip only already-active connectors. Registered-but-inactive entries
+      // still get attempted when they need no key (or the key is in the vault).
+      const already = new Set<string>();
+      connected.forEach((c) => already.add(c.id));
+      entries.forEach((e) => { if (e.connected) already.add(e.id); });
+      const targets = entries.filter((e) => !already.has(e.id));
+      let added = 0, noKey = 0, oauth = 0, failed = 0;
+      for (const e of targets) {
+        if (e.authType === 'oauth') { oauth++; continue; }
+        if ((e.authType === 'apiKey' || e.authType === 'bearer') && !e.apiKeyConfigured) { noKey++; continue; }
+        try {
+          await connectMcp(e.id, { baseUrl: e.baseUrl || undefined, enabled: true });
+          added++;
+          setAddAll((s) => s && { ...s, added });
+        } catch {
+          failed++;
+        }
+      }
+      await Promise.all([loadCatalogPage(true), loadConnected()]);
+      setAddAll({ running: false, added, noKey, oauth, failed });
+    } catch (e) {
+      setError(`Add all failed: ${(e as Error).message}`);
+      setAddAll(null);
+    }
   };
 
   const connectedCount = connected.filter((c) => c.connected).length;
@@ -191,6 +256,7 @@ export function ConnectorsView() {
 
   // Catalog items not yet connected
   const catalogFiltered = catalog.filter((e) => !connected.some((c) => c.id === e.id));
+  const isFeature = view === 'crm' || view === 'social' || view === 'carrusel';
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
@@ -199,27 +265,57 @@ export function ConnectorsView() {
         <div>
           <h1 className="hero-heading font-black uppercase tracking-tight leading-none" style={{ fontSize: 'clamp(1.6rem, 3.5vw, 2.4rem)' }}>Connectors</h1>
           <p className="text-sm mt-1 font-light" style={{ color: 'var(--text-dim)' }}>
-            {view === 'catalog' ? `${catalogTotal} connectors available` : `${connectedCount} of ${connected.length} connected`}
+            {view === 'catalog' ? `${catalogTotal} connectors available` : view === 'connected' ? `${connectedCount} of ${connected.length} connected` : view === 'crm' ? 'Twenty CRM workspace' : view === 'social' ? 'Social media automation' : 'Carousel builder'}
           </p>
         </div>
         <div className="flex items-center gap-2">
-          {view === 'catalog' && (
-            <button onClick={handleSync} disabled={syncing} className="flex items-center gap-1.5 px-3 rounded-xl text-[11px] font-medium" style={{ height: 34, background: 'var(--surface-2)', border: '1px solid var(--hairline-strong)', color: 'var(--text-dim)', fontFamily: 'var(--font)' }}>
-              <RefreshCw size={12} className={syncing ? 'animate-spin' : ''} /> Sync
-            </button>
+          {!isFeature && (
+            <>
+              {view === 'catalog' && (
+                <>
+                  <button onClick={handleAddAll} disabled={syncing || Boolean(addAll?.running)}
+                    className="flex items-center gap-1.5 px-3 rounded-xl text-[11px] font-semibold"
+                    style={{ height: 34, background: avatar.accent, color: '#fff', border: 'none', opacity: syncing || addAll?.running ? 0.6 : 1, fontFamily: 'var(--font)' }}>
+                    {addAll?.running ? <Loader2 size={12} className="animate-spin" /> : <Download size={12} />}
+                    {addAll?.running ? `Adding… ${addAll.added}` : 'Add All'}
+                  </button>
+                  <button onClick={handleSync} disabled={syncing} className="flex items-center gap-1.5 px-3 rounded-xl text-[11px] font-medium" style={{ height: 34, background: 'var(--surface-2)', border: '1px solid var(--hairline-strong)', color: 'var(--text-dim)', fontFamily: 'var(--font)' }}>
+                    <RefreshCw size={12} className={syncing ? 'animate-spin' : ''} /> Sync
+                  </button>
+                </>
+              )}
+              <div className="flex items-center gap-2 px-3 rounded-xl" style={{ height: 34, background: 'var(--surface-2)', border: '1px solid var(--hairline-strong)' }}>
+                <Search size={13} style={{ color: 'var(--text-faint)' }} />
+                <input value={query} onChange={(e) => handleQueryChange(e.target.value)}
+                  placeholder={view === 'catalog' ? 'Search 1000+ connectors…' : 'Search…'}
+                  className="bg-transparent outline-none text-sm w-44" style={{ color: 'var(--text-primary)', fontFamily: 'var(--font)' }} />
+              </div>
+            </>
           )}
-          <div className="flex items-center gap-2 px-3 rounded-xl" style={{ height: 34, background: 'var(--surface-2)', border: '1px solid var(--hairline-strong)' }}>
-            <Search size={13} style={{ color: 'var(--text-faint)' }} />
-            <input value={query} onChange={(e) => handleQueryChange(e.target.value)}
-              placeholder={view === 'catalog' ? 'Search 1000+ connectors…' : 'Search…'}
-              className="bg-transparent outline-none text-sm w-44" style={{ color: 'var(--text-primary)', fontFamily: 'var(--font)' }} />
-          </div>
-          <button onClick={() => setView(view === 'connected' ? 'catalog' : 'connected')}
-            className="flex items-center gap-1.5 px-3.5 rounded-xl text-[11px] font-medium"
-            style={{ height: 34, background: view === 'catalog' ? '#22C55E' : avatar.accent, color: '#fff', border: 'none', fontFamily: 'var(--font)' }}>
-            {view === 'catalog' ? <><Check size={13} /> Connected ({connectedCount})</> : <><Plug size={13} /> Browse All {catalogTotal > 0 ? catalogTotal : ''}</>}
-          </button>
         </div>
+      </div>
+
+      {/* Tab bar */}
+      <div className="flex items-center gap-1 px-6 py-2 hairline-b flex-wrap" style={{ background: 'rgba(6,7,9,0.5)', borderBottom: '1px solid var(--hairline)' }}>
+        {CONN_TABS.map((t) => {
+          const active = view === t.id;
+          return (
+            <button
+              key={t.id}
+              onClick={() => setView(t.id)}
+              className="flex items-center gap-1.5 px-3.5 rounded-lg text-[11px] font-medium transition-colors"
+              style={{
+                height: 30,
+                background: active ? avatar.accent : 'transparent',
+                color: active ? '#fff' : 'var(--text-dim)',
+                border: `1px solid ${active ? 'transparent' : 'var(--hairline-strong)'}`,
+                fontFamily: 'var(--font)',
+              }}
+            >
+              {t.icon} {t.label}
+            </button>
+          );
+        })}
       </div>
 
       {/* Error banner */}
@@ -230,7 +326,28 @@ export function ConnectorsView() {
         </div>
       )}
 
+      {/* Add All result banner */}
+      {addAll && !addAll.running && (
+        <div className="mx-6 mt-3 px-4 py-2.5 rounded-xl flex items-center gap-2 text-[11px]" style={{ background: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.3)', color: '#7EE2A8' }}>
+          <Check size={13} />
+          <span>
+            Added {addAll.added} connector{addAll.added === 1 ? '' : 's'}
+            {addAll.noKey > 0 && <> · {addAll.noKey} need an API key</>}
+            {addAll.oauth > 0 && <> · {addAll.oauth} need OAuth sign-in</>}
+            {addAll.failed > 0 && <> · {addAll.failed} failed</>}
+          </span>
+          <button onClick={() => setAddAll(null)} className="ml-auto" style={{ color: '#7EE2A8' }}><X size={12} /></button>
+        </div>
+      )}
+
       {/* Body */}
+      {isFeature ? (
+        <div className="flex-1 min-h-0 overflow-hidden">
+          {view === 'crm' && <CrmView />}
+          {view === 'social' && <SocialView />}
+          {view === 'carrusel' && <CarruselView />}
+        </div>
+      ) : (
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-6 py-5" style={{ maxWidth: 1100, width: '100%', margin: '0 auto' }}>
         {/* Category pills */}
         <div className="flex gap-2 mb-5 flex-wrap">
@@ -370,6 +487,8 @@ export function ConnectorsView() {
           </>
         )}
       </div>
+
+      )}
 
       {/* API Key Modal */}
       {connectModal && (

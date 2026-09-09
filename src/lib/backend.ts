@@ -13,8 +13,10 @@ export function getBackendUrl(): string {
 export async function isBackendAvailable(): Promise<boolean> {
   const now = Date.now();
   if (now - lastHealthCheck < HEALTH_CACHE_MS) return lastHealthResult;
+  // /api/health aggregates full status on this backend and can take ~10s
+  // when the machine is busy — probe with a generous timeout.
   try {
-    const res = await fetch(`${BACKEND_URL}/api/health`, { signal: AbortSignal.timeout(8000) });
+    const res = await fetch(`${BACKEND_URL}/api/health`, { signal: AbortSignal.timeout(20000) });
     lastHealthResult = res.ok;
   } catch {
     lastHealthResult = false;
@@ -33,7 +35,7 @@ export class BackendError extends Error {
 }
 
 export async function backendFetch<T = unknown>(path: string, opts?: RequestInit & { timeout?: number }): Promise<T> {
-  const { timeout = 30000, ...init } = opts ?? {};
+  const { timeout = 60000, ...init } = opts ?? {};
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeout);
   try {
@@ -263,8 +265,9 @@ export const getMcpCatalog = async (opts?: { q?: string; category?: string; enab
   if (opts?.limit) params.set('limit', String(opts.limit));
   if (opts?.offset) params.set('offset', String(opts.offset));
   const qs = params.toString();
-  // Catalog can be slow with 1000+ entries — use a longer timeout
-  const raw = await backendFetch<Record<string, unknown>>(`/api/mcp/catalog${qs ? `?${qs}` : ''}`, { timeout: 30000 });
+  // Catalog can be slow with 1000+ entries (esp. right after a registry
+  // sync) — use a long timeout so paging through it doesn't get aborted.
+  const raw = await backendFetch<Record<string, unknown>>(`/api/mcp/catalog${qs ? `?${qs}` : ''}`, { timeout: 120000 });
   const cat = (raw.catalog ?? raw) as Record<string, unknown>;
   return {
     entries: (cat.entries ?? []) as McpCatalogEntry[],
@@ -304,8 +307,10 @@ export const mcpOauthStatus = async (id: string) => {
   return res.oauth;
 };
 
+// Registry sync pulls servers from Smithery + the official MCP registry over
+// the network and can take minutes — use a long timeout so it isn't aborted.
 export const mcpSyncRegistry = async () => {
-  const res = await backendFetch<{ sync: unknown }>('/api/mcp/sync', { method: 'POST' });
+  const res = await backendFetch<{ sync: unknown }>('/api/mcp/sync', { method: 'POST', timeout: 240000 });
   return { sync: res.sync };
 };
 

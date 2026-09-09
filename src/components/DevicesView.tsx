@@ -3,6 +3,7 @@ import gsap from 'gsap';
 import { useAppStore } from '../stores/appStore';
 import { isBackendAvailable, backendFetch, deviceInvite, deviceJoin, deviceRevoke, deviceSend, getMeshStatus, meshPair, meshPairDemo, getChromeStatus, getChromeLogins, getChromeSites, getConnectors, disconnectConnector, BackendError } from '../lib/backend';
 import { Smartphone, Tablet, Headphones, Watch, Battery, CheckCircle2, QrCode, Bluetooth, Usb, Cloud, Nfc, Router, Plug, Unplug, UserPlus, Send, XCircle, RefreshCw, Globe, KeyRound, Link2, ChevronDown, ChevronUp, Loader2, Copy, Check, Wifi, ArrowRight } from 'lucide-react';
+import { DockerView } from './DockerView';
 
 interface Device {
   id: string;
@@ -115,9 +116,13 @@ export function DevicesView() {
     (async () => {
       if (!(await isBackendAvailable())) return;
       try {
-        const data = await backendFetch<{ devices: Array<{ id: string; name: string; type: string; online: boolean; lastSeen?: string }> }>('/api/devices');
-        if (cancelled || !data.devices?.length) return;
-        const mapped = data.devices.map((d) => ({
+        const data = await backendFetch<{ devices: { registered?: Array<{ id: string; name: string; type: string; online: boolean; lastSeen?: string }>; hub?: { onlineDevices?: Array<{ id: string; name: string; type: string; online: boolean }> } } }>('/api/devices');
+        if (cancelled) return;
+        const registered = data.devices?.registered ?? [];
+        const onlineDevices = data.devices?.hub?.onlineDevices ?? [];
+        const allDevices = [...registered, ...onlineDevices];
+        if (allDevices.length === 0) return;
+        const mapped = allDevices.map((d) => ({
           id: d.id,
           name: d.name,
           type: d.type || 'Device',
@@ -876,6 +881,11 @@ export function DevicesView() {
             </div>
           </div>
         )}
+
+        {/* ═══ DOCKER WORKERS ═══ */}
+        <div className="mb-5 overflow-hidden rounded-2xl" style={{ height: 560, border: '1px solid var(--hairline-strong)', background: 'var(--surface-1)' }}>
+          <DockerView />
+        </div>
 
         {/* ═══ TRANSFER QUEUE ═══ */}
         <div ref={queueRef} className="card p-5" style={{ background: 'var(--surface-1)' }}>

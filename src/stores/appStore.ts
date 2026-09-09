@@ -72,21 +72,100 @@ export interface UsageState {
   agents: Record<string, AgentUsage>;
 }
 
-const JOURNAL_KEY = 'umbra-journal-v2';
-const PROFILE_KEY = 'umbra-profile-v2';
-const AGENT_NAME_KEY = 'umbra-agent-name-v2';
-const AI_CONFIG_KEY = 'umbra-ai-config-v2';
-const AVATAR_KEY = 'umbra-avatar-v2';
-const VOICE_KEY = 'umbra-voice-v2';
-const VOICEBOX_KEY = 'umbra-voicebox-profile-v2';
-const AGENTS_KEY = 'umbra-agents-v2';
-const SEED_KEY = 'umbra-seed-v1';
-const BRAIN_KEY = 'umbra-brain-files-v1';
-const STT_KEY = 'umbra-stt-v1';
-const TALKALWAYS_KEY = 'umbra-talkalways-v1';
-const USAGE_KEY = 'umbra-usage-v1';
 const BRAIN_CAP = 300;
 const JOURNAL_CAP = 600;
+
+// Namespacing localStorage by Supabase user id so multiple accounts on one
+// machine do not share the same vault. When there is no authenticated user we
+// fall back to an anonymous local-only namespace so the app still works.
+function storagePrefixForUser(userId: string | null) {
+  if (!userId) return 'umbra-anon';
+  // Use a deterministic prefix derived from the Supabase user id.
+  return `umbra-${userId}`;
+}
+
+function namespacedKey(userId: string | null, key: string) {
+  return `${storagePrefixForUser(userId)}:${key}`;
+}
+
+function namespacedRemove(userId: string | null, key: string) {
+  try { localStorage.removeItem(namespacedKey(userId, key)); } catch { /* ignore */ }
+}
+
+function namespacedGet(userId: string | null, key: string): string | null {
+  try { return localStorage.getItem(namespacedKey(userId, key)); } catch { return null; }
+}
+
+function namespacedSet(userId: string | null, key: string, value: string) {
+  try { localStorage.setItem(namespacedKey(userId, key), value); } catch { /* ignore */ }
+}
+
+// Current authenticated user id used for storage namespacing. This is set from
+// Supabase session and updated on login/signup/logout/initializeAuth.
+export function currentStorageUserId(): string | null {
+  const s = typeof window !== 'undefined' ? window.localStorage : null;
+  if (!s) return null;
+  try {
+    const raw = s.getItem('umbra-storage-user-id');
+    return raw ? JSON.parse(raw) : null;
+  } catch { return null; }
+}
+
+// Convenience wrappers keyed by the current storage user id. These are used by
+// the store for all user-scoped storage so switching users switches the vault.
+export function getNS(userId: string | null, key: string): string | null {
+  return namespacedGet(userId, key);
+}
+export function setNS(userId: string | null, key: string, value: string): void {
+  namespacedSet(userId, key, value);
+}
+export function removeNS(userId: string | null, key: string): void {
+  namespacedRemove(userId, key);
+}
+
+// Authenticated user keys are created dynamically via namespacedKey(...).
+
+// Migration helper: when we first see an authenticated user, move any legacy
+// unkeyed values under the new namespace and clear the old global keys.
+function migrateLegacyKeysToUser(userId: string | null) {
+  if (!userId) return;
+  const migrate = (legacy: string, nsKey: string) => {
+    try {
+      const legacyVal = localStorage.getItem(legacy);
+      if (legacyVal !== null) {
+        localStorage.setItem(namespacedKey(userId, nsKey), legacyVal);
+        localStorage.removeItem(legacy);
+      }
+    } catch { /* ignore */ }
+  };
+  migrate('umbra-journal-v2', 'journal');
+  migrate('umbra-profile-v2', 'profile');
+  migrate('umbra-agent-name-v2', 'agent-name');
+  migrate('umbra-ai-config-v2', 'ai-config');
+  migrate('umbra-avatar-v2', 'avatar');
+  migrate('umbra-voice-v2', 'voice');
+  migrate('umbra-voicebox-profile-v2', 'voicebox');
+  migrate('umbra-agents-v2', 'agents');
+  migrate('umbra-stt-v1', 'stt');
+  migrate('umbra-talkalways-v1', 'talkalways');
+  migrate('umbra-usage-v1', 'usage');
+  migrate('umbra-brain-files-v1', 'brain');
+  migrate('umbra-seed-v1', 'seed');
+}
+
+const JOURNAL_KEY = 'journal';
+const PROFILE_KEY = 'profile';
+const AGENT_NAME_KEY = 'agent-name';
+const AI_CONFIG_KEY = 'ai-config';
+const AVATAR_KEY = 'avatar';
+const VOICE_KEY = 'voice';
+const VOICEBOX_KEY = 'voicebox';
+const AGENTS_KEY = 'agents';
+const SEED_KEY = 'seed';
+const BRAIN_KEY = 'brain';
+const STT_KEY = 'stt';
+const TALKALWAYS_KEY = 'talkalways';
+const USAGE_KEY = 'usage';
 
 const TEST_CONVERSATION: { type: JournalType; text: string; minutesAgo: number }[] = [
   { type: 'action', text: 'Brain writing started for Davide', minutesAgo: 2900 },
@@ -132,9 +211,17 @@ const TEST_CONVERSATION: { type: JournalType; text: string; minutesAgo: number }
   { type: 'agent', text: 'Hey Davide. What do you need?', minutesAgo: 42 },
 ];
 
-function loadAvatar(): AvatarConfig {
+function loadFromStore(userId: string | null, key: string): string | null {
+  if (userId) {
+    migrateLegacyKeysToUser(userId);
+    return namespacedGet(userId, key);
+  }
+  return namespacedGet(userId, key);
+}
+
+function loadAvatar(userId: string | null): AvatarConfig {
   try {
-    const raw = localStorage.getItem(AVATAR_KEY);
+    const raw = loadFromStore(userId, AVATAR_KEY);
     if (!raw) return defaultAvatar;
     const p = JSON.parse(raw);
     if (p && typeof p === 'object') {
@@ -146,33 +233,25 @@ function loadAvatar(): AvatarConfig {
   return defaultAvatar;
 }
 
-function loadVoiceURI(): string | null {
-  try {
-    return localStorage.getItem(VOICE_KEY);
-  } catch {
-    return null;
-  }
+function loadVoiceURI(userId: string | null): string | null {
+  return loadFromStore(userId, VOICE_KEY);
 }
 
-function loadTalkAlways(): boolean {
+function loadTalkAlways(userId: string | null): boolean {
   try {
-    return localStorage.getItem(TALKALWAYS_KEY) !== '0';
+    return loadFromStore(userId, TALKALWAYS_KEY) !== '0';
   } catch {
     return true;
   }
 }
 
-function loadVoiceboxProfile(): string | null {
-  try {
-    return localStorage.getItem(VOICEBOX_KEY);
-  } catch {
-    return null;
-  }
+function loadVoiceboxProfile(userId: string | null): string | null {
+  return loadFromStore(userId, VOICEBOX_KEY);
 }
 
-function loadAIConfig(): AIConfig | null {
+function loadAIConfig(userId: string | null): AIConfig | null {
   try {
-    const raw = localStorage.getItem(AI_CONFIG_KEY);
+    const raw = loadFromStore(userId, AI_CONFIG_KEY);
     if (!raw) return null;
     const c = JSON.parse(raw);
     if (c && typeof c.provider === 'string' && typeof c.model === 'string') {
@@ -184,9 +263,9 @@ function loadAIConfig(): AIConfig | null {
   return null;
 }
 
-function loadSTTConfig(): STTConfig | null {
+function loadSTTConfig(userId: string | null): STTConfig | null {
   try {
-    const raw = localStorage.getItem(STT_KEY);
+    const raw = loadFromStore(userId, STT_KEY);
     if (!raw) return null;
     const c = JSON.parse(raw);
     if (c && (c.provider === 'local' || c.provider === 'openai' || c.provider === 'groq') && typeof c.model === 'string') {
@@ -198,9 +277,9 @@ function loadSTTConfig(): STTConfig | null {
   return null;
 }
 
-function loadJournal(): JournalEntry[] {
+function loadJournal(userId: string | null): JournalEntry[] {
   try {
-    const raw = localStorage.getItem(JOURNAL_KEY);
+    const raw = loadFromStore(userId, JOURNAL_KEY);
     if (!raw) return [];
     const arr = JSON.parse(raw);
     if (!Array.isArray(arr)) return [];
@@ -213,9 +292,9 @@ function loadJournal(): JournalEntry[] {
   }
 }
 
-function saveJournal(journal: JournalEntry[]) {
+function saveJournal(userId: string | null, journal: JournalEntry[]) {
   try {
-    localStorage.setItem(JOURNAL_KEY, JSON.stringify(journal.slice(-JOURNAL_CAP)));
+    namespacedSet(userId, JOURNAL_KEY, JSON.stringify(journal.slice(-JOURNAL_CAP)));
   } catch {
     // ignore
   }
@@ -238,12 +317,12 @@ function welcomeBrainFile(): BrainFile {
   };
 }
 
-function loadBrainFiles(): BrainFile[] {
+function loadBrainFiles(userId: string | null): BrainFile[] {
   try {
-    const raw = localStorage.getItem(BRAIN_KEY);
+    const raw = loadFromStore(userId, BRAIN_KEY);
     if (!raw) {
       const seeded = [welcomeBrainFile()];
-      localStorage.setItem(BRAIN_KEY, JSON.stringify(seeded));
+      namespacedSet(userId, BRAIN_KEY, JSON.stringify(seeded));
       return seeded;
     }
     const arr = JSON.parse(raw);
@@ -264,17 +343,17 @@ function loadBrainFiles(): BrainFile[] {
   }
 }
 
-function saveBrainFiles(files: BrainFile[]) {
+function saveBrainFiles(userId: string | null, files: BrainFile[]) {
   try {
-    localStorage.setItem(BRAIN_KEY, JSON.stringify(files.slice(0, BRAIN_CAP)));
+    namespacedSet(userId, BRAIN_KEY, JSON.stringify(files.slice(0, BRAIN_CAP)));
   } catch {
     // ignore
   }
 }
 
-function loadUsage(): UsageState {
+function loadUsage(userId: string | null): UsageState {
   try {
-    const raw = localStorage.getItem(USAGE_KEY);
+    const raw = loadFromStore(userId, USAGE_KEY);
     if (!raw) return { totalCalls: 0, totalTokens: 0, agents: {} };
     const u = JSON.parse(raw);
     if (!u || typeof u !== 'object') return { totalCalls: 0, totalTokens: 0, agents: {} };
@@ -288,17 +367,17 @@ function loadUsage(): UsageState {
   }
 }
 
-function saveUsage(usage: UsageState) {
+function saveUsage(userId: string | null, usage: UsageState) {
   try {
-    localStorage.setItem(USAGE_KEY, JSON.stringify(usage));
+    namespacedSet(userId, USAGE_KEY, JSON.stringify(usage));
   } catch {
     // ignore
   }
 }
 
-function loadProfile(key: string): Profile | null {
+function loadProfileFromStore(userId: string | null, key: string): Profile | null {
   try {
-    const raw = localStorage.getItem(key);
+    const raw = loadFromStore(userId, key);
     if (!raw) return null;
     const p = JSON.parse(raw);
     if (p && typeof p.name === 'string') {
@@ -314,17 +393,13 @@ function loadProfile(key: string): Profile | null {
   return null;
 }
 
-function loadAgentName(key: string): string | null {
-  try {
-    return localStorage.getItem(key);
-  } catch {
-    return null;
-  }
+function loadAgentNameFromStore(userId: string | null, key: string): string | null {
+  return loadFromStore(userId, key);
 }
 
-function loadAgents(): Agent[] {
+function loadAgentsFromStore(userId: string | null, key: string): Agent[] {
   try {
-    const raw = localStorage.getItem(AGENTS_KEY);
+    const raw = loadFromStore(userId, key);
     if (!raw) return [];
     const arr = JSON.parse(raw);
     if (!Array.isArray(arr)) return [];
@@ -343,17 +418,17 @@ function loadAgents(): Agent[] {
   }
 }
 
-function loadNamedMain(): boolean {
+function loadNamedMain(userId: string | null): boolean {
   try {
-    return localStorage.getItem('umbra-named-v1') === '1';
+    return loadFromStore(userId, 'named-main') === '1';
   } catch {
     return false;
   }
 }
 
-function saveAgents(agents: Agent[]) {
+function saveAgentsToStore(userId: string | null, key: string, agents: Agent[]) {
   try {
-    localStorage.setItem(AGENTS_KEY, JSON.stringify(agents));
+    namespacedSet(userId, key, JSON.stringify(agents));
   } catch {
     // ignore
   }
@@ -365,6 +440,7 @@ interface AppState {
   emailVerified: boolean;
   isOnboarded: boolean;
   user: User | null;
+  storageUserId: string | null;
   avatar: AvatarConfig;
   avatarName: string;
   profile: Profile | null;
@@ -418,6 +494,7 @@ interface AppState {
   setAgentStatus: (id: string, status: Agent['status']) => void;
   focusAgent: (id: string | null) => void;
   seedTestBrain: () => void;
+  reloadUserStorage: () => void;
 
   // Backend integration
   backendApiKey: string | null;
@@ -448,42 +525,81 @@ export const defaultAvatar: AvatarConfig = {
 
 let authListenerStarted = false;
 
-export const useAppStore = create<AppState>((set) => ({
-  isAuthenticated: false,
-  isAuthReady: false,
-  emailVerified: false,
-  isOnboarded: false,
-  user: null,
-  avatar: loadAvatar(),
-  avatarName: loadAgentName(AGENT_NAME_KEY) ?? 'Umbra',
-  namedMain: loadNamedMain(),
-  profile: loadProfile(PROFILE_KEY),
-  journal: loadJournal(),
-  brainFiles: loadBrainFiles(),
-  usage: loadUsage(),
-  aiConfig: loadAIConfig(),
-  sttConfig: loadSTTConfig(),
-  voiceURI: loadVoiceURI(),
-  voiceboxProfile: loadVoiceboxProfile(),
-  agents: loadAgents(),
-  focusedAgentId: null,
-  currentView: 'agent',
-  isSidebarCollapsed: false,
-  talkAlways: loadTalkAlways(),
-  backendOnline: false,
-  backendStatus: null,
-  activeTasks: [],
-  backendApiKey: localStorage.getItem('umbra-backend-apikey') || null,
-  screenWatching: false,
-  screenState: null,
-  consentState: null,
-  liveTasks: [],
+function storageUserIdFromUser(user: User | null) {
+  // Use Supabase user id when available; otherwise keep the existing anonymous
+  // storage prefix so the app still works before/after auth.
+  if (!user) return currentStorageUserId();
+  return user.email?.toLowerCase().trim() || null;
+}
 
-  setBackendApiKey: (key) => {
-    set({ backendApiKey: key });
+export const useAppStore = create<AppState>((set, get) => {
+  const initialUserId = currentStorageUserId();
+
+  const reloadUserStorage = () => {
+    const userId = get().storageUserId;
+    set({
+      avatar: loadAvatar(userId),
+      avatarName: loadAgentNameFromStore(userId, AGENT_NAME_KEY) ?? 'Umbra',
+      namedMain: loadNamedMain(userId),
+      profile: loadProfileFromStore(userId, PROFILE_KEY),
+      journal: loadJournal(userId),
+      brainFiles: loadBrainFiles(userId),
+      usage: loadUsage(userId),
+      aiConfig: loadAIConfig(userId),
+      sttConfig: loadSTTConfig(userId),
+      voiceURI: loadVoiceURI(userId),
+      voiceboxProfile: loadVoiceboxProfile(userId),
+      agents: loadAgentsFromStore(userId, AGENTS_KEY),
+    });
+  };
+
+  return {
+    isAuthenticated: false,
+    isAuthReady: false,
+    emailVerified: false,
+    isOnboarded: false,
+    user: null,
+    storageUserId: initialUserId,
+    avatar: loadAvatar(initialUserId),
+    avatarName: loadAgentNameFromStore(initialUserId, AGENT_NAME_KEY) ?? 'Umbra',
+    namedMain: loadNamedMain(initialUserId),
+    profile: loadProfileFromStore(initialUserId, PROFILE_KEY),
+    journal: loadJournal(initialUserId),
+    brainFiles: loadBrainFiles(initialUserId),
+    usage: loadUsage(initialUserId),
+    aiConfig: loadAIConfig(initialUserId),
+    sttConfig: loadSTTConfig(initialUserId),
+    voiceURI: loadVoiceURI(initialUserId),
+    voiceboxProfile: loadVoiceboxProfile(initialUserId),
+    agents: loadAgentsFromStore(initialUserId, AGENTS_KEY),
+    focusedAgentId: null,
+    currentView: 'agent',
+    isSidebarCollapsed: false,
+    talkAlways: loadTalkAlways(initialUserId),
+    backendOnline: false,
+    backendStatus: null,
+    activeTasks: [],
+    backendApiKey: loadFromStore(initialUserId, 'backend-apikey') || null,
+    screenWatching: false,
+    screenState: null,
+    consentState: null,
+    liveTasks: [],
+    reloadUserStorage,
+
+    setBackendApiKey: (key) => {
+      set({ backendApiKey: key });
+      const userId = get().storageUserId;
+      try {
+        if (key) namespacedSet(userId, 'backend-apikey', key);
+        else namespacedRemove(userId, 'backend-apikey');
+      } catch { /* ignore */ }
+    },
+
+  setTalkAlways: (on) => {
+    set({ talkAlways: on });
+    const userId = get().storageUserId;
     try {
-      if (key) localStorage.setItem('umbra-backend-apikey', key);
-      else localStorage.removeItem('umbra-backend-apikey');
+      namespacedSet(userId, TALKALWAYS_KEY, on ? '1' : '0');
     } catch { /* ignore */ }
   },
 
@@ -668,9 +784,26 @@ export const useAppStore = create<AppState>((set) => ({
     set({ isAuthReady: true, isAuthenticated: !!session });
     applySession(session);
 
+    // Keep the localStorage namespace aligned with auth state so multiple
+    // accounts on one machine do not share the same vault.
+    const userId = storageUserIdFromUser(session ? sessionToAuthView(session).user : null);
+    set({ storageUserId: userId });
+    migrateLegacyKeysToUser(userId);
+    reloadUserStorage();
+
     if (!authListenerStarted) {
       sb.auth.onAuthStateChange((_event, nextSession) => {
-        applySession(nextSession);
+        const vNext = sessionToAuthView(nextSession);
+        const userIdNext = storageUserIdFromUser(vNext.user);
+        set({
+          user: vNext.user,
+          isAuthenticated: !!nextSession,
+          emailVerified: vNext.emailVerified,
+          isOnboarded: vNext.isOnboarded,
+          storageUserId: userIdNext,
+        });
+        migrateLegacyKeysToUser(userIdNext);
+        reloadUserStorage();
       });
       authListenerStarted = true;
     }
@@ -679,8 +812,8 @@ export const useAppStore = create<AppState>((set) => ({
     if (session) {
       try {
         if (await isBackendAvailable()) {
-          // Check if we have a stored backend API key
-          const storedKey = localStorage.getItem('umbra-backend-apikey');
+          // Check if we have a stored backend API key in the current namespace
+          const storedKey = namespacedGet(userId, 'backend-apikey');
           if (storedKey) {
             set({ backendApiKey: storedKey });
           }
@@ -697,14 +830,22 @@ export const useAppStore = create<AppState>((set) => ({
         localStorage.setItem('umbra-dev-user', JSON.stringify(u));
         set({ isAuthenticated: true, user: u, emailVerified: true, isOnboarded: true });
       } else if (supabase) {
-        const { data } = await supabase.auth.getSession();
-        const v = sessionToAuthView(data?.session);
-        set({ isAuthenticated: true, user: v.user, emailVerified: v.emailVerified, isOnboarded: v.isOnboarded });
+        const { data } = await supabase.auth.getSession();      const v = sessionToAuthView(data?.session);
+      const userId = storageUserIdFromUser(v.user);
+      set({
+        isAuthenticated: true,
+        user: v.user,
+        emailVerified: v.emailVerified,
+        isOnboarded: v.isOnboarded,
+        storageUserId: userId,
+      });
+      migrateLegacyKeysToUser(userId);
+      reloadUserStorage();
 
         // Try to sync with backend
         try {
           if (await isBackendAvailable()) {
-            const storedKey = localStorage.getItem('umbra-backend-apikey');
+            const storedKey = namespacedGet(userId, 'backend-apikey');
             if (storedKey) {
               set({ backendApiKey: storedKey });
             }
@@ -724,14 +865,32 @@ export const useAppStore = create<AppState>((set) => ({
     const { data } = await supabase.auth.getSession();
     if (data?.session) {
       const v = sessionToAuthView(data.session);
-      set({ isAuthenticated: true, user: v.user, emailVerified: v.emailVerified, isOnboarded: v.isOnboarded });
+      const userId = storageUserIdFromUser(v.user);
+      set({
+        isAuthenticated: true,
+        user: v.user,
+        emailVerified: v.emailVerified,
+        isOnboarded: v.isOnboarded,
+        storageUserId: userId,
+      });
+      migrateLegacyKeysToUser(userId);
+      reloadUserStorage();
       return res;
     }
     const loginRes = await signIn(email, password);
     if (loginRes.ok) {
       const { data: sessionData } = await supabase.auth.getSession();
       const v = sessionToAuthView(sessionData?.session);
-      set({ isAuthenticated: true, user: v.user, emailVerified: v.emailVerified, isOnboarded: v.isOnboarded });
+      const userId = storageUserIdFromUser(v.user);
+      set({
+        isAuthenticated: true,
+        user: v.user,
+        emailVerified: v.emailVerified,
+        isOnboarded: v.isOnboarded,
+        storageUserId: userId,
+      });
+      migrateLegacyKeysToUser(userId);
+      reloadUserStorage();
     }
     return loginRes.ok ? res : loginRes;
   },
@@ -743,18 +902,18 @@ export const useAppStore = create<AppState>((set) => ({
     if (res.ok && supabase) {
       const { data } = await supabase.auth.getSession();
       const v = sessionToAuthView(data?.session);
-      set({ isAuthenticated: true, emailVerified: true, user: v.user, isOnboarded: v.isOnboarded });
+      const userId = storageUserIdFromUser(v.user);
+      set({
+        isAuthenticated: true,
+        emailVerified: true,
+        user: v.user,
+        isOnboarded: v.isOnboarded,
+        storageUserId: userId,
+      });
+      migrateLegacyKeysToUser(userId);
+      reloadUserStorage();
     }
     return res;
-  },
-
-  setTalkAlways: (on) => {
-    set({ talkAlways: on });
-    try {
-      localStorage.setItem(TALKALWAYS_KEY, on ? '1' : '0');
-    } catch {
-      // ignore
-    }
   },
 
   finishOnboarding: async () => {
@@ -766,18 +925,30 @@ export const useAppStore = create<AppState>((set) => ({
       }
     }
     set({ isOnboarded: true });
+    // Persist onboarding under the current user namespace so it survives
+    // across restarts and does not leak to other local accounts.
+    const userId = get().storageUserId;
+    try {
+      namespacedSet(userId, 'onboarded', '1');
+    } catch { /* ignore */ }
   },
 
   logout: async () => {
     await signOut();
-    if (import.meta.env.DEV) localStorage.removeItem('umbra-dev-user');
+    if (import.meta.env.DEV) {
+      try { localStorage.removeItem('umbra-dev-user'); } catch { /* ignore */ }
+    }
+    // Switch the localStorage namespace back to an anonymous local-only one
+    // so the next login/signup does not inherit the previous user's vault.
     set({
       isAuthenticated: false,
       user: null,
+      storageUserId: null,
       emailVerified: false,
       isOnboarded: false,
       currentView: 'agent',
     });
+    reloadUserStorage();
   },
 
   setView: (view) => {
@@ -791,40 +962,34 @@ export const useAppStore = create<AppState>((set) => ({
   updateAvatar: (patch) => {
     set((state) => {
       const next = { ...state.avatar, ...patch };
+      const userId = get().storageUserId;
       try {
-        localStorage.setItem(AVATAR_KEY, JSON.stringify(next));
-      } catch {
-        // ignore
-      }
+        namespacedSet(userId, AVATAR_KEY, JSON.stringify(next));
+      } catch { /* ignore */ }
       return { avatar: next };
     });
-  },
-
-  setAvatarName: (name) => {
+  },  setAvatarName: (name) => {
     set({ avatarName: name });
+    const userId = get().storageUserId;
     try {
-      localStorage.setItem(AGENT_NAME_KEY, name);
-    } catch {
-      // ignore
-    }
+      namespacedSet(userId, AGENT_NAME_KEY, name);
+    } catch { /* ignore */ }
   },
 
   markNamedMain: () => {
     set({ namedMain: true });
+    const userId = get().storageUserId;
     try {
-      localStorage.setItem('umbra-named-v1', '1');
-    } catch {
-      // ignore
-    }
+      namespacedSet(userId, 'named-main', '1');
+    } catch { /* ignore */ }
   },
 
   setProfile: (profile) => {
     set({ profile });
+    const userId = get().storageUserId;
     try {
-      localStorage.setItem(PROFILE_KEY, JSON.stringify(profile));
-    } catch {
-      // ignore
-    }
+      namespacedSet(userId, PROFILE_KEY, JSON.stringify(profile));
+    } catch { /* ignore */ }
   },
 
   addFact: (fact) => {
@@ -850,8 +1015,9 @@ export const useAppStore = create<AppState>((set) => ({
       ts: Date.now(),
     };
     set((state) => {
+      const userId = get().storageUserId;
       const next = [...state.journal, entry].slice(-JOURNAL_CAP);
-      saveJournal(next);
+      saveJournal(userId, next);
       return { journal: next };
     });
   },
@@ -859,6 +1025,7 @@ export const useAppStore = create<AppState>((set) => ({
   recordUsage: (agentName, tokens) => {
     const t = Math.max(1, Math.round(tokens));
     set((state) => {
+      const userId = get().storageUserId;
       const name = agentName || 'Umbra';
       const cur = state.usage.agents[name] ?? { calls: 0, tokens: 0 };
       const next: UsageState = {
@@ -866,7 +1033,7 @@ export const useAppStore = create<AppState>((set) => ({
         totalTokens: state.usage.totalTokens + t,
         agents: { ...state.usage.agents, [name]: { calls: cur.calls + 1, tokens: cur.tokens + t } },
       };
-      saveUsage(next);
+      saveUsage(userId, next);
       return { usage: next };
     });
   },
@@ -881,71 +1048,69 @@ export const useAppStore = create<AppState>((set) => ({
       content,
     };
     set((state) => {
+      const userId = get().storageUserId;
       const next = [file, ...state.brainFiles].slice(0, BRAIN_CAP);
-      saveBrainFiles(next);
+      saveBrainFiles(userId, next);
       return { brainFiles: next };
     });
   },
 
   setAIConfig: (config) => {
     set({ aiConfig: config });
+    const userId = get().storageUserId;
     try {
-      localStorage.setItem(AI_CONFIG_KEY, JSON.stringify(config));
-    } catch {
-      // ignore
-    }
+      namespacedSet(userId, AI_CONFIG_KEY, JSON.stringify(config));
+    } catch { /* ignore */ }
   },
 
   clearAIConfig: () => {
     set({ aiConfig: null });
+    const userId = get().storageUserId;
     try {
-      localStorage.removeItem(AI_CONFIG_KEY);
-    } catch {
-      // ignore
-    }
+      namespacedRemove(userId, AI_CONFIG_KEY);
+    } catch { /* ignore */ }
   },
 
   setSTTConfig: (config) => {
     set({ sttConfig: config });
+    const userId = get().storageUserId;
     try {
-      localStorage.setItem(STT_KEY, JSON.stringify(config));
-    } catch {
-      // ignore
-    }
+      namespacedSet(userId, STT_KEY, JSON.stringify(config));
+    } catch { /* ignore */ }
   },
 
   clearSTTConfig: () => {
     set({ sttConfig: null });
+    const userId = get().storageUserId;
     try {
-      localStorage.removeItem(STT_KEY);
-    } catch {
-      // ignore
-    }
+      namespacedRemove(userId, STT_KEY);
+    } catch { /* ignore */ }
   },
 
   setVoice: (uri) => {
     set({ voiceURI: uri });
+    const userId = get().storageUserId;
     try {
-      if (uri) localStorage.setItem(VOICE_KEY, uri);
-      else localStorage.removeItem(VOICE_KEY);
-    } catch {
-      // ignore
-    }
+      if (uri) namespacedSet(userId, VOICE_KEY, uri);
+      else namespacedRemove(userId, VOICE_KEY);
+    } catch { /* ignore */ }
   },
 
   setVoiceboxProfile: (id) => {
     set({ voiceboxProfile: id });
+    const userId = get().storageUserId;
     try {
-      if (id) localStorage.setItem(VOICEBOX_KEY, id);
-      else localStorage.removeItem(VOICEBOX_KEY);
-    } catch {
-      // ignore
-    }
+      if (id) namespacedSet(userId, VOICEBOX_KEY, id);
+      else namespacedRemove(userId, VOICEBOX_KEY);
+    } catch { /* ignore */ }
   },
 
   clearBrain: () => {
+    const userId = get().storageUserId;
     try {
-      for (const k of [JOURNAL_KEY, PROFILE_KEY, AGENT_NAME_KEY, AI_CONFIG_KEY, AVATAR_KEY, VOICE_KEY, VOICEBOX_KEY, AGENTS_KEY, BRAIN_KEY, STT_KEY, 'umbra-journal', 'umbra-profile', 'umbra-agent-name', 'umbra-named-v1']) localStorage.removeItem(k);
+      for (const k of [JOURNAL_KEY, PROFILE_KEY, AGENT_NAME_KEY, AI_CONFIG_KEY, AVATAR_KEY, VOICE_KEY, VOICEBOX_KEY, AGENTS_KEY, BRAIN_KEY, STT_KEY, 'umbra-journal', 'umbra-profile', 'umbra-agent-name', 'umbra-named-v1']) {
+        namespacedRemove(userId, k);
+      }
     } catch {
       // ignore
     }
@@ -954,7 +1119,7 @@ export const useAppStore = create<AppState>((set) => ({
       avatarName: 'Umbra',
       namedMain: false,
       journal: [],
-      brainFiles: loadBrainFiles(),
+      brainFiles: loadBrainFiles(userId),
       aiConfig: null,
       sttConfig: null,
       voiceURI: null,
@@ -969,8 +1134,9 @@ export const useAppStore = create<AppState>((set) => ({
     const id = `agent-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
     const full = { ...agent, id };
     set((state) => {
+      const userId = get().storageUserId;
       const next = [...state.agents, full];
-      saveAgents(next);
+      saveAgentsToStore(userId, AGENTS_KEY, next);
       return { agents: next, focusedAgentId: id };
     });
     return full;
@@ -978,8 +1144,9 @@ export const useAppStore = create<AppState>((set) => ({
 
   removeAgent: (id) => {
     set((state) => {
+      const userId = get().storageUserId;
       const next = state.agents.filter((a) => a.id !== id);
-      saveAgents(next);
+      saveAgentsToStore(userId, AGENTS_KEY, next);
       return {
         agents: next,
         focusedAgentId: state.focusedAgentId === id ? null : state.focusedAgentId,
@@ -989,16 +1156,18 @@ export const useAppStore = create<AppState>((set) => ({
 
   updateAgent: (id, patch) => {
     set((state) => {
+      const userId = get().storageUserId;
       const next = state.agents.map((a) => (a.id === id ? { ...a, ...patch } : a));
-      saveAgents(next);
+      saveAgentsToStore(userId, AGENTS_KEY, next);
       return { agents: next };
     });
   },
 
   setAgentStatus: (id, status) => {
     set((state) => {
+      const userId = get().storageUserId;
       const next = state.agents.map((a) => (a.id === id ? { ...a, status } : a));
-      saveAgents(next);
+      saveAgentsToStore(userId, AGENTS_KEY, next);
       return { agents: next };
     });
   },
@@ -1008,14 +1177,15 @@ export const useAppStore = create<AppState>((set) => ({
   },
 
   seedTestBrain: () => {
+    const userId = get().storageUserId;
     try {
-      if (localStorage.getItem(SEED_KEY)) return;
+      if (namespacedGet(userId, SEED_KEY)) return;
     } catch {
       return;
     }
-    if (useAppStore.getState().journal.length > 0) {
+    if (get().journal.length > 0) {
       try {
-        localStorage.setItem(SEED_KEY, '1');
+        namespacedSet(userId, SEED_KEY, '1');
       } catch {
         // ignore
       }
@@ -1029,11 +1199,12 @@ export const useAppStore = create<AppState>((set) => ({
       ts: now - e.minutesAgo * 60000,
     }));
     set({ journal: seeded });
-    saveJournal(seeded);
+    saveJournal(userId, seeded);
     try {
-      localStorage.setItem(SEED_KEY, '1');
+      namespacedSet(userId, SEED_KEY, '1');
     } catch {
       // ignore
     }
   },
-}));
+  };
+});

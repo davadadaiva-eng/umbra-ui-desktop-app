@@ -5,6 +5,7 @@ import { AI_PROVIDERS, providerById, testAI, DEFAULT_AI, type AIConfig } from '.
 import { isBackendAvailable, getProviderConfig, configureProvider, testLlm, getModelStatus, getVoiceStatus, listAudioDevices, setAudioDefault, type VoiceStatus } from '../lib/backend';
 import { STT_PROVIDERS, sttProviderById, transcribeAudio, silentWavBlob, type STTConfig } from '../lib/stt';
 import { VoicePicker } from './VoicePicker';
+import { ConsentView } from './ConsentView';
 import { Eye, EyeOff, Mic, Smartphone, Settings as SettingsIcon, Cpu, CheckCircle2, XCircle, Loader2, Trash2, Volume2, ArrowRight, AudioLines, Headphones } from 'lucide-react';
 
 const accentColors = ['#3B82F6', '#60A5FA', '#B600A8', '#7621B0', '#BE4C00', '#0E7C7B'];
@@ -767,6 +768,11 @@ export function SettingsView() {
               </div>
             </div>
           ))}
+        </div>
+
+        {/* Privacy & Consent */}
+        <div className="card mt-4 overflow-hidden" style={{ background: 'var(--surface-1)', border: '1px solid var(--hairline-strong)' }}>
+          <ConsentView />
         </div>
 
         <div className="card p-5 mt-4 flex items-center justify-between gap-4" style={{ background: 'var(--surface-1)' }}>
